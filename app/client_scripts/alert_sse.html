@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <pre id="log"></pre>
+  <script>
+    const log = (msg) => {
+      document.getElementById('log').textContent += msg + '\n';
+    };
+    const es = new EventSource('http://192.168.26.232:8000/api/v1/streams/alerts/sse');
+    es.addEventListener('connected', (e) => log('connected: ' + e.data));
+    es.addEventListener('person_count_alert', (e) => log('alert: ' + e.data));
+    es.onerror = () => log('sse error / reconnecting...');
+  </script>
+</body>
+</html>

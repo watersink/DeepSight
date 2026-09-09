@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" fill="none">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="640" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14201a"/>
+      <stop offset="1" stop-color="#0c1210"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#bg2)"/>
+  <rect x="36" y="28" width="568" height="344" rx="18" stroke="#2c3832" stroke-width="2" fill="#171e1b"/>
+  <!-- monitor frame -->
+  <rect x="90" y="90" width="360" height="230" rx="10" fill="#101613" stroke="#3d9b6e" stroke-width="3"/>
+  <rect x="108" y="108" width="324" height="176" rx="6" fill="#0a100e"/>
+  <!-- people boxes -->
+  <rect x="140" y="150" width="70" height="110" rx="4" stroke="#3d9b6e" stroke-width="3" fill="rgba(61,155,110,0.12)"/>
+  <rect x="240" y="130" width="78" height="130" rx="4" stroke="#c4a35a" stroke-width="3" fill="rgba(196,163,90,0.12)"/>
+  <rect x="350" y="160" width="60" height="100" rx="4" stroke="#3d9b6e" stroke-width="3" fill="rgba(61,155,110,0.12)"/>
+  <!-- count badge -->
+  <rect x="470" y="120" width="110" height="110" rx="16" fill="#1e2723" stroke="#2c3832"/>
+  <text x="525" y="168" text-anchor="middle" fill="#8fa099" font-family="Segoe UI, sans-serif" font-size="14">;bºp</text>
+  <text x="525" y="208" text-anchor="middle" fill="#b7ebc9" font-family="Segoe UI, sans-serif" font-size="42" font-weight="700">3</text>
+  <text x="48" y="58" fill="#e8eee9" font-family="Segoe UI, sans-serif" font-size="22" font-weight="650">;bºp</text>
+  <text x="48" y="84" fill="#8fa099" font-family="Segoe UI, sans-serif" font-size="14">presence · ºpØ‹ö</text>
+</svg>
