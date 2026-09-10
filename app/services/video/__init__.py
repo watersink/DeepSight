@@ -28,6 +28,11 @@ from app.services.video.async_processor import AsyncFrameProcessor
 from app.services.video.pipeline import VideoStreamPipeline
 from app.services.video.camera_ingest import CameraFanoutPipeline
 from app.services.video.encoder import check_nvenc_available
+from app.services.video.decoder import (
+    check_cuda_hwaccel_available,
+    check_qsv_hwaccel_available,
+    select_hw_decode_backend,
+)
 
 __all__ = [
     "AlertCallback",
@@ -44,4 +49,7 @@ __all__ = [
     "VideoStreamPipeline",
     "CameraFanoutPipeline",
     "check_nvenc_available",
+    "check_cuda_hwaccel_available",
+    "check_qsv_hwaccel_available",
+    "select_hw_decode_backend",
 ]

@@ -48,6 +48,18 @@ function TileIcon() {
 
 export default function AlgorithmsPage() {
   const [skills, setSkills] = useState<any[]>([]);
+  const [skillWorkers, setSkillWorkers] = useState<
+    Record<
+      string,
+      {
+        id: string;
+        name: string;
+        online: boolean | null;
+        triton_url?: string | null;
+        models_ready?: boolean;
+      }[]
+    >
+  >({});
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -62,9 +74,137 @@ export default function AlgorithmsPage() {
   const load = async () => {
     setError("");
     try {
-      const sk = await api.getSkills();
-      setSkills(sk.skills || []);
+      const [sk, modelsRes, wk] = await Promise.all([
+        api.getSkills(),
+        api.getModels().catch(() => ({ items: [], workers: [] as any[] })),
+        api.getWorkers().catch(() => ({ items: [] as any[] })),
+      ]);
+      const skillList = sk.skills || [];
+      setSkills(skillList);
       setPage(1);
+
+      // model_name -> workers that have it
+      const modelWorkers: Record<
+        string,
+        { id: string; name: string; online: boolean; triton_url?: string | null }[]
+      > = {};
+      for (const m of modelsRes.items || []) {
+        const name = String(m.name || "").trim();
+        if (!name) continue;
+        modelWorkers[name] = (m.workers || []).map((w: any) => ({
+          id: String(w.worker_id),
+          name: String(w.worker_name || w.worker_id),
+          online: !!w.ready,
+          triton_url: w.triton_url || null,
+        }));
+      }
+
+      const workerOnline: Record<string, boolean | null> = {};
+      for (const w of wk.items || []) {
+        workerOnline[String(w.id)] =
+          typeof w.online === "boolean" ? w.online : null;
+      }
+      for (const w of modelsRes.workers || []) {
+        if (workerOnline[w.worker_id] == null && typeof w.online === "boolean") {
+          workerOnline[String(w.worker_id)] = w.online;
+        }
+      }
+
+      const skillMap: Record<
+        string,
+        {
+          id: string;
+          name: string;
+          online: boolean | null;
+          triton_url?: string | null;
+          models_ready?: boolean;
+        }[]
+      > = {};
+
+      for (const skill of skillList) {
+        const skillName = String(skill.skill_name || "").trim();
+        if (!skillName) continue;
+        const required: string[] = (skill.required_models || [])
+          .map((x: any) => String(x || "").trim())
+          .filter(Boolean);
+
+        const byId = new Map<
+          string,
+          {
+            id: string;
+            name: string;
+            online: boolean | null;
+            triton_url?: string | null;
+            models_ready?: boolean;
+          }
+        >();
+
+        if (required.length) {
+          // 交集：依赖模型都出现在该 Worker 上才算部署
+          let first = true;
+          const counts: Record<string, number> = {};
+          const meta: Record<
+            string,
+            { name: string; triton_url?: string | null; readyHits: number }
+          > = {};
+          for (const modelName of required) {
+            const nodes = modelWorkers[modelName] || [];
+            for (const n of nodes) {
+              counts[n.id] = (counts[n.id] || 0) + 1;
+              if (!meta[n.id]) {
+                meta[n.id] = {
+                  name: n.name,
+                  triton_url: n.triton_url,
+                  readyHits: 0,
+                };
+              }
+              if (n.online) meta[n.id].readyHits += 1;
+              if (first && n.triton_url) meta[n.id].triton_url = n.triton_url;
+            }
+            first = false;
+          }
+          for (const [id, cnt] of Object.entries(counts)) {
+            if (cnt < required.length) continue;
+            const info = meta[id];
+            byId.set(id, {
+              id,
+              name: info.name,
+              online: workerOnline[id] ?? true,
+              triton_url: info.triton_url,
+              models_ready: info.readyHits >= required.length,
+            });
+          }
+        }
+
+        // 无依赖模型或 Triton 未扫到时，回退：Worker 技能列表含该 skill
+        if (!byId.size) {
+          await Promise.all(
+            (wk.items || []).map(async (w: any) => {
+              const id = String(w.id);
+              try {
+                const res = await api.getWorkerSkills(id);
+                const hit = (res.skills || []).some(
+                  (s: any) => String(s.skill_name) === skillName
+                );
+                if (!hit) return;
+                byId.set(id, {
+                  id,
+                  name: String(w.name || id),
+                  online: typeof w.online === "boolean" ? w.online : null,
+                  triton_url: w.triton_url || null,
+                  models_ready: undefined,
+                });
+              } catch {
+                /* ignore */
+              }
+            })
+          );
+        }
+
+        skillMap[skillName] = Array.from(byId.values());
+      }
+
+      setSkillWorkers(skillMap);
     } catch (e: any) {
       setError(e.message || String(e));
     }
@@ -87,6 +227,44 @@ export default function AlgorithmsPage() {
     return skills.slice(start, start + PAGE_SIZE);
   }, [skills, page]);
 
+  const renderWorkerTags = (skillName: string) => {
+    const nodes = skillWorkers[skillName] || [];
+    if (!nodes.length) {
+      return <span className="muted">未部署 / 未探测到</span>;
+    }
+    return (
+      <div className="worker-tag-row">
+        {nodes.map((n) => (
+          <span
+            key={n.id}
+            className={`badge worker-tag ${
+              n.online === false || n.models_ready === false
+                ? "stop"
+                : n.online || n.models_ready
+                  ? "run"
+                  : ""
+            }`}
+            title={
+              [
+                n.name,
+                n.triton_url ? `Triton: ${n.triton_url}` : "",
+                n.models_ready === false ? "依赖模型未就绪" : "",
+                n.online === false ? "Worker 离线" : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")
+            }
+          >
+            {n.name}
+            {n.triton_url ? ` · ${n.triton_url}` : ""}
+            {n.online === false ? " · 离线" : ""}
+            {n.models_ready === false ? " · 模型未就绪" : ""}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="page-shell">
       <div className="page-head">
@@ -94,6 +272,7 @@ export default function AlgorithmsPage() {
           <h1>算法管理</h1>
           <p>
             展示系统已注册的检测技能（只读）。识别参数在「任务配置 → 新增/编辑任务」中一并填写。
+            Worker 标签优先按该技能依赖的 Triton 模型所在机器展示（含 Triton 地址）。
           </p>
         </div>
         <div className="toolbar">
@@ -136,6 +315,7 @@ export default function AlgorithmsPage() {
                   <th>封面</th>
                   <th>中文名称</th>
                   <th>skill_name</th>
+                  <th>部署 Worker</th>
                   <th>依赖模型</th>
                   <th>说明</th>
                 </tr>
@@ -154,6 +334,7 @@ export default function AlgorithmsPage() {
                     </td>
                     <td>{s.name_zh || s.skill_name}</td>
                     <td className="mono">{s.skill_name}</td>
+                    <td>{renderWorkerTags(s.skill_name)}</td>
                     <td className="mono muted">
                       {(s.required_models || []).join(", ") || "—"}
                     </td>
@@ -162,7 +343,7 @@ export default function AlgorithmsPage() {
                 ))}
                 {!paged.length && (
                   <tr>
-                    <td colSpan={5} className="muted">
+                    <td colSpan={6} className="muted">
                       暂无已注册算法
                     </td>
                   </tr>
@@ -183,6 +364,12 @@ export default function AlgorithmsPage() {
                   <div className="skill-tile-body">
                     <h3>{s.name_zh || s.skill_name}</h3>
                     <p className="mono muted">{s.skill_name}</p>
+                    <div className="skill-tile-workers">
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        部署节点
+                      </span>
+                      {renderWorkerTags(s.skill_name)}
+                    </div>
                     <p className="skill-tile-desc">{s.description || "暂无说明"}</p>
                     <p className="mono muted skill-tile-models">
                       模型：{(s.required_models || []).join(", ") || "—"}

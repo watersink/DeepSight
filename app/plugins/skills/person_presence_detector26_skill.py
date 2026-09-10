@@ -48,6 +48,8 @@ class PersonPresenceDetector26Skill(BaseSkill):
         ),
         "status": True,
         "required_models": ["yolo26_person"],
+        # 仅画面人数，任务配置页无需方向/计数线等字段
+        "form_fields": [],
         "params": {
             "classes": ["person"],
             "target_class_ids": [COCO_PERSON_CLASS_ID],

@@ -165,6 +165,8 @@ class TaskConfig(Base):
     push_annotated_stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # 运行时间窗：{enabled, timezone, days[1-7], start_time, end_time}
     schedule: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # 绑定的算力 Worker（local / gpu1 / ...）
+    worker_id: Mapped[str] = mapped_column(String(64), default="local", nullable=False)
     last_runtime_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     remark: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(

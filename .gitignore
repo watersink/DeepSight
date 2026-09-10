@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 前端构建产物
+dist/
+
+# 保留 static 目录结构；uploads 下运行时文件不入库
+static/uploads/**
+!static/uploads/.gitkeep
+
+# 本地测试音视频素材：忽略目录内文件，但保留 .bat
+test_images_videos/**
+!test_images_videos/**/
+!test_images_videos/**/*.bat

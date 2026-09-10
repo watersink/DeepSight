@@ -42,6 +42,8 @@ class PersonCountDetectorSkill(BaseSkill):
         "description": "基于 yolo11_person 的简单人数检测技能，支持人数统计",
         "status": True,
         "required_models": ["yolo11_person"],
+        # 简单人数统计，任务配置页暂无方向/过线等专用字段
+        "form_fields": [],
         "params": {
             "classes": ["person"],
             "conf_thres": 0.5,

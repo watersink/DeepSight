@@ -37,6 +37,7 @@ type SkillBinding = {
 type TaskForm = {
   name: string;
   camera_id: number;
+  worker_id: string;
   scene_id: string;
   output_format: string;
   out_fps: number;
@@ -83,6 +84,7 @@ function emptySkill(skillName = "person_presence_detector26"): SkillBinding {
 const emptyForm = (): TaskForm => ({
   name: "",
   camera_id: 0,
+  worker_id: "local",
   scene_id: "scene_001",
   output_format: "rtmp",
   out_fps: 15,
@@ -95,8 +97,45 @@ const emptyForm = (): TaskForm => ({
   skills: [emptySkill()],
 });
 
-function needsCountLine(skillName: string) {
-  return skillName === "person_count_detector26";
+function skillFormFields(skills: any[], skillName: string): any[] {
+  const s = skills.find((x) => x.skill_name === skillName);
+  const fields = Array.isArray(s?.form_fields) ? s.form_fields : [];
+  if (fields.length) return fields;
+  // 兼容旧 Worker / 未声明 form_fields 的计数技能
+  if (skillName === "person_count_detector26") {
+    return [
+      {
+        key: "gate_direction",
+        label: "方向",
+        type: "select",
+        required: true,
+        options: [
+          { value: "IN", label: "IN" },
+          { value: "OUT", label: "OUT" },
+        ],
+      },
+      { key: "enter_count", label: "计数初始值", type: "number", required: false },
+      {
+        key: "count_line",
+        label: "过线计数线",
+        type: "line_draw",
+        draw_field: "count_line",
+        required: true,
+      },
+      {
+        key: "bypass_line",
+        label: "绕行线",
+        type: "line_draw",
+        draw_field: "bypass_line",
+        required: false,
+      },
+    ];
+  }
+  return [];
+}
+
+function findFormField(fields: any[], key: string) {
+  return fields.find((f) => f?.key === key) || null;
 }
 
 function normalizeTimeInput(v: string, fallback: string) {
@@ -142,6 +181,8 @@ export default function TasksPage() {
   const [cameras, setCameras] = useState<any[]>([]);
   const [algos, setAlgos] = useState<any[]>([]);
   const [skills, setSkills] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<any[]>([]);
+  const [workerSkills, setWorkerSkills] = useState<any[]>([]);
 
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -159,20 +200,37 @@ export default function TasksPage() {
     return map;
   }, [algos]);
 
+  const selectableSkills = workerSkills.length ? workerSkills : skills;
+
   const isEdit = editingId != null;
   const drawSkill = drawTarget
     ? form.skills.find((s) => s.key === drawTarget.skillKey)
     : null;
 
+  const loadWorkerSkills = async (workerId: string) => {
+    if (!workerId) {
+      setWorkerSkills([]);
+      return;
+    }
+    try {
+      const res = await api.getWorkerSkills(workerId);
+      setWorkerSkills(res.skills || []);
+    } catch {
+      setWorkerSkills([]);
+    }
+  };
+
   const loadFormOptions = async () => {
-    const [cams, algorithms, sk] = await Promise.all([
+    const [cams, algorithms, sk, wk] = await Promise.all([
       api.getCameras(),
       api.getAlgorithms(),
       api.getSkills(),
+      api.getWorkers().catch(() => ({ items: [] })),
     ]);
     setCameras(cams.items || []);
     setAlgos(algorithms.items || []);
     setSkills(sk.skills || []);
+    setWorkers(wk.items || []);
   };
 
   const loadTasks = async (pageNo = page) => {
@@ -229,9 +287,10 @@ export default function TasksPage() {
 
   const addSkill = () => {
     const used = new Set(form.skills.map((s) => s.skill_name));
+    const pool = selectableSkills;
     const next =
-      skills.find((s) => !used.has(s.skill_name))?.skill_name ||
-      skills[0]?.skill_name ||
+      pool.find((s) => !used.has(s.skill_name))?.skill_name ||
+      pool[0]?.skill_name ||
       "person_presence_detector26";
     setForm((f) => ({ ...f, skills: [...f.skills, emptySkill(next)] }));
   };
@@ -244,24 +303,36 @@ export default function TasksPage() {
   };
 
   const openCreate = () => {
+    const defaultWorker =
+      workers.find((w) => w.online !== false)?.id ||
+      workers[0]?.id ||
+      "local";
     setEditingId(null);
     setForm({
       ...emptyForm(),
       camera_id: cameras[0]?.id || 0,
-      skills: [emptySkill(skills[0]?.skill_name || emptySkill().skill_name)],
+      worker_id: defaultWorker,
+      skills: [
+        emptySkill(
+          selectableSkills[0]?.skill_name || emptySkill().skill_name
+        ),
+      ],
     });
     setFormOpen(true);
     setError("");
     setMsg("");
+    loadWorkerSkills(defaultWorker);
   };
 
   const openEdit = (t: any) => {
     const algo = algoById.get(t.algorithm_config_id);
     const sch = t.schedule || {};
+    const wid = t.worker_id || workers[0]?.id || "local";
     setEditingId(t.id);
     setForm({
       name: t.name || "",
       camera_id: t.camera_id,
+      worker_id: wid,
       scene_id: t.scene_id || "scene_001",
       output_format: t.output_format || "rtmp",
       out_fps: t.out_fps || 15,
@@ -284,7 +355,7 @@ export default function TasksPage() {
         {
           key: nextSkillKey(),
           skill_name:
-            algo?.skill_name || t.skill_name || skills[0]?.skill_name || "",
+            algo?.skill_name || t.skill_name || selectableSkills[0]?.skill_name || "",
           gate_direction: algo?.gate_direction || "IN",
           enter_count: algo?.enter_count ?? 0,
           count_line_text: algo?.count_line
@@ -300,6 +371,7 @@ export default function TasksPage() {
     setFormOpen(true);
     setError("");
     setMsg("");
+    loadWorkerSkills(wid);
   };
 
   const closeForm = () => {
@@ -326,10 +398,19 @@ export default function TasksPage() {
       }
 
       for (const s of form.skills) {
-        if (needsCountLine(s.skill_name) && !s.count_line_text.trim()) {
-          throw new Error(
-            `技能「${skillLabel(skills, s.skill_name)}」必须配置 count_line`
-          );
+        const fields = skillFormFields(skills, s.skill_name);
+        const label = skillLabel(skills, s.skill_name);
+        for (const f of fields) {
+          if (!f?.required) continue;
+          if (f.key === "count_line" && !s.count_line_text.trim()) {
+            throw new Error(`技能「${label}」必须配置 ${f.label || "count_line"}`);
+          }
+          if (f.key === "bypass_line" && !s.bypass_line_text.trim()) {
+            throw new Error(`技能「${label}」必须配置 ${f.label || "bypass_line"}`);
+          }
+          if (f.key === "gate_direction" && !String(s.gate_direction || "").trim()) {
+            throw new Error(`技能「${label}」必须配置 ${f.label || "方向"}`);
+          }
         }
       }
 
@@ -390,6 +471,7 @@ export default function TasksPage() {
         const taskBody = {
           name: finalTaskName,
           camera_id: Number(form.camera_id),
+          worker_id: form.worker_id || "local",
           algorithm_config_id: Number(algorithmConfigId),
           scene_id: sceneId,
           output_format: form.output_format,
@@ -465,6 +547,7 @@ export default function TasksPage() {
                 <th>ID</th>
                 <th>名称</th>
                 <th>摄像头 / 技能</th>
+                <th>Worker</th>
                 <th>运行时间段</th>
                 <th>运行状态</th>
                 <th>操作</th>
@@ -473,6 +556,11 @@ export default function TasksPage() {
             <tbody>
               {items.map((t) => {
                 const algo = algoById.get(t.algorithm_config_id);
+                const skillName = t.skill_name || algo?.skill_name || "";
+                const showGateBrief = !!findFormField(
+                  skillFormFields(skills, skillName),
+                  "gate_direction"
+                );
                 return (
                   <tr key={t.id}>
                     <td>{t.id}</td>
@@ -483,10 +571,16 @@ export default function TasksPage() {
                     <td>
                       {t.camera_name || `摄像头#${t.camera_id}`}
                       <div className="muted mono">
-                        {t.skill_name || algo?.skill_name || "-"}
-                        {algo?.gate_direction
+                        {skillName || "-"}
+                        {showGateBrief && algo?.gate_direction
                           ? ` · ${algo.gate_direction}/${algo.enter_count ?? 0}`
                           : ""}
+                      </div>
+                    </td>
+                    <td>
+                      {t.worker_name || t.worker_id || "local"}
+                      <div className="muted mono" style={{ fontSize: 12 }}>
+                        {t.worker_id || "local"}
                       </div>
                     </td>
                     <td>
@@ -664,6 +758,29 @@ export default function TasksPage() {
                       {cameras.map((c) => (
                         <option key={c.id} value={c.id}>
                           #{c.id} {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    算力 Worker
+                    <select
+                      required
+                      value={form.worker_id || ""}
+                      onChange={(e) => {
+                        const wid = e.target.value;
+                        setForm({ ...form, worker_id: wid });
+                        loadWorkerSkills(wid);
+                      }}
+                    >
+                      {!workers.length && (
+                        <option value="local">本机 (local)</option>
+                      )}
+                      {workers.map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name || w.id}
+                          {w.online === false ? " · 离线" : ""}
+                          {w.local ? " · 本机" : ""}
                         </option>
                       ))}
                     </select>
@@ -887,7 +1004,11 @@ export default function TasksPage() {
                 </p>
 
                 {form.skills.map((s, idx) => {
-                  const showLines = needsCountLine(s.skill_name);
+                  const fields = skillFormFields(skills, s.skill_name);
+                  const gateField = findFormField(fields, "gate_direction");
+                  const enterField = findFormField(fields, "enter_count");
+                  const countLineField = findFormField(fields, "count_line");
+                  const bypassLineField = findFormField(fields, "bypass_line");
                   const canRemove = form.skills.length > 1 && !(isEdit && idx === 0);
                   return (
                     <div className="skill-binding" key={s.key}>
@@ -914,99 +1035,126 @@ export default function TasksPage() {
                               updateSkill(s.key, { skill_name: e.target.value })
                             }
                           >
-                            {skills.map((opt) => (
+                            {selectableSkills.map((opt) => (
                               <option key={opt.skill_name} value={opt.skill_name}>
                                 {opt.name_zh || opt.skill_name}
                               </option>
                             ))}
-                            {!skills.length && (
+                            {!selectableSkills.length && (
                               <option value={s.skill_name}>{s.skill_name}</option>
                             )}
                           </select>
                         </label>
-                        <label>
-                          闸机方向
-                          <select
-                            value={s.gate_direction}
-                            onChange={(e) =>
-                              updateSkill(s.key, {
-                                gate_direction: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="IN">IN</option>
-                            <option value="OUT">OUT</option>
-                          </select>
-                        </label>
-                        <label>
-                          enter_count 初值
-                          <input
-                            type="number"
-                            value={s.enter_count}
-                            onChange={(e) =>
-                              updateSkill(s.key, {
-                                enter_count: Number(e.target.value),
-                              })
-                            }
-                          />
-                        </label>
+                        {gateField && (
+                          <label>
+                            {gateField.label || "方向"}
+                            {gateField.required ? " *" : ""}
+                            <select
+                              value={s.gate_direction}
+                              onChange={(e) =>
+                                updateSkill(s.key, {
+                                  gate_direction: e.target.value,
+                                })
+                              }
+                            >
+                              {(gateField.options?.length
+                                ? gateField.options
+                                : [
+                                    { value: "IN", label: "IN" },
+                                    { value: "OUT", label: "OUT" },
+                                  ]
+                              ).map((opt: any) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label || opt.value}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        {enterField && (
+                          <label>
+                            {enterField.label || "计数初始值"}
+                            {enterField.required ? " *" : ""}
+                            <input
+                              type="number"
+                              value={s.enter_count}
+                              onChange={(e) =>
+                                updateSkill(s.key, {
+                                  enter_count: Number(e.target.value),
+                                })
+                              }
+                            />
+                          </label>
+                        )}
                       </div>
 
-                      {showLines && (
+                      {(countLineField || bypassLineField) && (
                         <div className="form-grid" style={{ marginTop: 12 }}>
-                          <label className="full">
-                            count_line（过线必填）
-                            <div className="toolbar" style={{ margin: "6px 0" }}>
-                              <button
-                                className="btn primary"
-                                type="button"
-                                onClick={() =>
-                                  setDrawTarget({
-                                    field: "count_line",
-                                    skillKey: s.key,
+                          {countLineField && (
+                            <label className="full">
+                              {countLineField.label || "count_line"}
+                              {countLineField.required ? "（必填）" : "（可选）"}
+                              {countLineField.hint ? (
+                                <span className="muted"> · {countLineField.hint}</span>
+                              ) : null}
+                              <div className="toolbar" style={{ margin: "6px 0" }}>
+                                <button
+                                  className="btn primary"
+                                  type="button"
+                                  onClick={() =>
+                                    setDrawTarget({
+                                      field: "count_line",
+                                      skillKey: s.key,
+                                    })
+                                  }
+                                >
+                                  截图绘制 count_line
+                                </button>
+                              </div>
+                              <textarea
+                                rows={6}
+                                placeholder='{"lines":[...],"image_width":1920,"image_height":1080}'
+                                value={s.count_line_text}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    count_line_text: e.target.value,
                                   })
                                 }
-                              >
-                                截图绘制 count_line
-                              </button>
-                            </div>
-                            <textarea
-                              rows={6}
-                              placeholder='{"lines":[...],"image_width":1920,"image_height":1080}'
-                              value={s.count_line_text}
-                              onChange={(e) =>
-                                updateSkill(s.key, {
-                                  count_line_text: e.target.value,
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="full">
-                            bypass_line（可选）
-                            <div className="toolbar" style={{ margin: "6px 0" }}>
-                              <button
-                                className="btn primary"
-                                type="button"
-                                onClick={() =>
-                                  setDrawTarget({
-                                    field: "bypass_line",
-                                    skillKey: s.key,
+                              />
+                            </label>
+                          )}
+                          {bypassLineField && (
+                            <label className="full">
+                              {bypassLineField.label || "bypass_line"}
+                              {bypassLineField.required ? "（必填）" : "（可选）"}
+                              {bypassLineField.hint ? (
+                                <span className="muted"> · {bypassLineField.hint}</span>
+                              ) : null}
+                              <div className="toolbar" style={{ margin: "6px 0" }}>
+                                <button
+                                  className="btn primary"
+                                  type="button"
+                                  onClick={() =>
+                                    setDrawTarget({
+                                      field: "bypass_line",
+                                      skillKey: s.key,
+                                    })
+                                  }
+                                >
+                                  截图绘制 bypass_line
+                                </button>
+                              </div>
+                              <textarea
+                                rows={5}
+                                value={s.bypass_line_text}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    bypass_line_text: e.target.value,
                                   })
                                 }
-                              >
-                                截图绘制 bypass_line
-                              </button>
-                            </div>
-                            <textarea
-                              rows={5}
-                              value={s.bypass_line_text}
-                              onChange={(e) =>
-                                updateSkill(s.key, {
-                                  bypass_line_text: e.target.value,
-                                })
-                              }
-                            />
-                          </label>
+                              />
+                            </label>
+                          )}
                         </div>
                       )}
                     </div>

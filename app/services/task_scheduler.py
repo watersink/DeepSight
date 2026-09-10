@@ -24,7 +24,7 @@ from sqlalchemy.orm import joinedload
 from app.db import session_scope
 from app.db.models import TaskConfig
 from app.services import mgmt_service as svc
-from app.services.stream_task_manager import stream_task_manager
+from app.services.runtime_gateway import WorkerApiError, runtime_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -135,11 +135,26 @@ def _runtime_alive(row: TaskConfig) -> bool:
     tid = row.last_runtime_task_id
     if not tid:
         return False
-    task = stream_task_manager.get_task(tid)
-    if not task:
+    worker_id = getattr(row, "worker_id", None)
+    try:
+        data = runtime_gateway.get_task(tid, worker_id=worker_id)
+    except WorkerApiError:
+        logger.exception(
+            "探测任务存活失败 runtime=%s worker=%s", tid, worker_id
+        )
         return False
-    data = stream_task_manager.enrich_task_dict(task)
-    return data.get("status") in {"running", "starting"} and data.get("pid") is not None
+    if not data:
+        return False
+    status = data.get("status")
+    if status not in {"running", "starting"}:
+        return False
+    # 远程 Worker 可能不回传 pid；状态为 running/starting 即视为存活
+    if data.get("pid") is not None:
+        return True
+    node_local = str(data.get("worker_id") or worker_id or "") == "local"
+    if node_local:
+        return data.get("pid") is not None
+    return True
 
 
 def reconcile_scheduled_tasks() -> None:

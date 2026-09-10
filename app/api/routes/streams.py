@@ -16,7 +16,7 @@ from app.api.schemas import (
 from app.core.config import settings
 from app.plugins.skill_registry import SkillNotFoundError, resolve_skill_class
 from app.services.alert_hub import alert_hub
-from app.services.stream_task_manager import stream_task_manager
+from app.services.runtime_gateway import WorkerApiError, runtime_gateway
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +30,10 @@ _COMMON_ERRORS = {
 }
 
 
-def _to_response(task, message: str = None) -> StreamTaskResponse:
-    data = stream_task_manager.enrich_task_dict(task)
+def _to_response(data: dict, message: str = None) -> StreamTaskResponse:
     flv_url = settings.build_flv_play_url_from_out_url(data.get("out_url"))
     if not flv_url and data.get("scene_id") and data.get("skill_name"):
         flv_url = settings.build_flv_play_url(data["scene_id"], data["skill_name"])
-    # StreamTaskResponse 可能不含 camera_key / ingest_branches，只传已知字段
     payload = {
         "task_id": data.get("task_id"),
         "status": data.get("status"),
@@ -44,6 +42,8 @@ def _to_response(task, message: str = None) -> StreamTaskResponse:
         "in_url": data.get("in_url"),
         "out_url": data.get("out_url"),
         "pid": data.get("pid"),
+        "worker_id": data.get("worker_id"),
+        "worker_name": data.get("worker_name"),
         "created_at": data.get("created_at"),
         "started_at": data.get("started_at"),
         "stopped_at": data.get("stopped_at"),
@@ -141,8 +141,13 @@ def start_stream(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     try:
-        payload = settings.resolve_stream_start(request.model_dump())
-        task = stream_task_manager.start_task(payload)
+        dumped = request.model_dump()
+        worker_id = dumped.pop("worker_id", None)
+        payload = settings.resolve_stream_start(dumped)
+        task = runtime_gateway.start_task(payload, worker_id=worker_id)
+    except WorkerApiError as e:
+        code = status.HTTP_409_CONFLICT if e.status_code == 409 else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=code, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
@@ -167,7 +172,10 @@ def stop_stream(
     task_id: Annotated[str, Path(description="推流任务 ID，由启动接口返回")],
 ):
     try:
-        task = stream_task_manager.stop_task(task_id)
+        task = runtime_gateway.stop_task(task_id)
+    except WorkerApiError as e:
+        code = status.HTTP_404_NOT_FOUND if e.status_code == 404 else status.HTTP_502_BAD_GATEWAY
+        raise HTTPException(status_code=code, detail=str(e))
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"任务不存在: {task_id}")
     except Exception as e:
@@ -185,7 +193,7 @@ def stop_stream(
     responses={200: {"description": "任务列表"}},
 )
 def list_streams():
-    tasks = stream_task_manager.list_tasks()
+    tasks = runtime_gateway.list_tasks()
     items = [_to_response(t) for t in tasks]
     return StreamTaskListResponse(total=len(items), tasks=items)
 
@@ -277,7 +285,7 @@ def _sse_event(event: str, data: dict) -> str:
 def get_stream(
     task_id: Annotated[str, Path(description="推流任务 ID")],
 ):
-    task = stream_task_manager.get_task(task_id)
+    task = runtime_gateway.get_task(task_id)
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"任务不存在: {task_id}")
     return _to_response(task)

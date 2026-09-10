@@ -224,6 +224,11 @@ class TaskConfigCreate(BaseModel):
         default=False, description="是否推送 AI 画框识别结果视频"
     )
     schedule: Optional[TaskSchedule] = None
+    worker_id: str = Field(
+        default="local",
+        max_length=64,
+        description="算力 Worker 节点 ID（见 WORKER_NODES / GET /workers）",
+    )
     remark: str = Field(default="", max_length=255)
 
 
@@ -239,6 +244,7 @@ class TaskConfigUpdate(BaseModel):
     alert_video_enabled: Optional[bool] = None
     push_annotated_stream: Optional[bool] = None
     schedule: Optional[TaskSchedule] = None
+    worker_id: Optional[str] = Field(default=None, max_length=64)
     remark: Optional[str] = Field(default=None, max_length=255)
 
 
@@ -258,6 +264,8 @@ class TaskConfigOut(BaseModel):
     push_annotated_stream: bool = False
     schedule: Optional[Dict[str, Any]] = None
     schedule_active: bool = False
+    worker_id: str = "local"
+    worker_name: Optional[str] = None
     last_runtime_task_id: Optional[str] = None
     remark: str
     created_at: datetime
@@ -372,11 +380,31 @@ class PartnerIntegrationListResponse(BaseModel):
     meta: PageMeta
 
 
+class TritonModelWorkerOut(BaseModel):
+    worker_id: str
+    worker_name: Optional[str] = None
+    triton_url: Optional[str] = None
+    ready: bool = False
+    version: Optional[str] = None
+    state: Optional[str] = None
+
+
 class TritonModelOut(BaseModel):
     name: str
     version: Optional[str] = None
     state: Optional[str] = None
     ready: bool = False
+    workers: List[TritonModelWorkerOut] = Field(default_factory=list)
+
+
+class TritonWorkerMetaOut(BaseModel):
+    worker_id: str
+    worker_name: Optional[str] = None
+    server_url: Optional[str] = None
+    server_live: Optional[bool] = None
+    server_ready: Optional[bool] = None
+    online: Optional[bool] = None
+    error: Optional[str] = None
 
 
 class TritonModelListResponse(BaseModel):
@@ -386,4 +414,5 @@ class TritonModelListResponse(BaseModel):
     server_name: Optional[str] = None
     server_version: Optional[str] = None
     items: List[TritonModelOut]
+    workers: List[TritonWorkerMetaOut] = Field(default_factory=list)
     error: Optional[str] = None

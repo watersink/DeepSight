@@ -65,8 +65,10 @@ def _meta(page: int, page_size: int, total: int) -> PageMeta:
 
 @router.get("/models", response_model=TritonModelListResponse, summary="Triton 模型列表")
 def list_models():
-    """基于 Triton `get_model_repository_index` 返回机器上已部署模型。"""
-    data = svc.list_triton_models()
+    """汇总各 Worker 节点本机 Triton 仓库中的模型，并标注部署机器。"""
+    from app.services.runtime_gateway import runtime_gateway
+
+    data = runtime_gateway.list_models_aggregated()
     return TritonModelListResponse(**data)
 
 

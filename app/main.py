@@ -29,12 +29,14 @@ from app.api.routes.open_api import router as open_api_router
 from app.api.routes.platform_settings import router as platform_settings_router
 from app.api.routes.skills import router as skills_router
 from app.api.routes.streams import router as streams_router
+from app.api.routes.workers import router as workers_router
 from app.api.schemas import HealthResponse
 from app.core.config import settings
 from app.services.alert_hub import alert_hub
 from app.services.minio_client import MinioClientError, minio_storage
 from app.services.redis_cache import get_redis
-from app.services.stream_task_manager import stream_task_manager
+from app.services.runtime_gateway import runtime_gateway
+from app.services.worker_nodes import list_worker_nodes
 
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
 logging.basicConfig(
@@ -70,6 +72,10 @@ OPENAPI_TAGS = [
             "基于 ZLMediaKit `startRecordTask` 截取回溯 + 前向事件视频，"
             "并生成中间帧截图（Base64 返回）。"
         ),
+    },
+    {
+        "name": "Worker节点",
+        "description": "列出算力 Worker、探测健康状态，并查询各节点可用技能。",
     },
     {
         "name": "管理台",
@@ -202,6 +208,10 @@ async def lifespan(app: FastAPI):
         )
     get_redis()
     alert_hub.start()
+    logger.info(
+        "已加载 Worker 节点: %s",
+        ", ".join(f"{n.id}({n.url})" for n in list_worker_nodes()),
+    )
     try:
         from app.services.task_scheduler import start_scheduler
 
@@ -233,7 +243,7 @@ async def lifespan(app: FastAPI):
             settings.MINIO_ENDPOINT,
         )
     yield
-    logger.info("服务关闭，正在停止所有推流任务...")
+    logger.info("服务关闭，正在停止本机推流任务...")
     try:
         from app.services.webhook_dispatch import stop_webhook_mq_worker
 
@@ -246,7 +256,7 @@ async def lifespan(app: FastAPI):
         stop_scheduler()
     except Exception:
         logger.exception("APScheduler 停止异常")
-    stream_task_manager.stop_all()
+    runtime_gateway.stop_all_local()
     alert_hub.stop()
 
 
@@ -280,6 +290,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(streams_router, prefix=settings.API_V1_STR)
 app.include_router(skills_router, prefix=settings.API_V1_STR)
+app.include_router(workers_router, prefix=settings.API_V1_STR)
 app.include_router(clip_router, prefix=settings.API_V1_STR)
 app.include_router(mgmt_router, prefix=settings.API_V1_STR)
 app.include_router(platform_settings_router, prefix=settings.API_V1_STR)
@@ -308,9 +319,8 @@ def root():
 def health_check() -> HealthResponse:
     running = sum(
         1
-        for t in stream_task_manager.list_tasks()
-        if stream_task_manager.enrich_task_dict(t).get("status")
-        in {"running", "starting"}
+        for t in runtime_gateway.list_tasks()
+        if t.get("status") in {"running", "starting"}
     )
     return HealthResponse(
         status="ok",

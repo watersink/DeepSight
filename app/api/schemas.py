@@ -39,6 +39,33 @@ class HealthResponse(BaseModel):
 # 技能
 # ---------------------------------------------------------------------------
 
+class SkillFormFieldOption(BaseModel):
+    value: str
+    label: str
+
+
+class SkillFormField(BaseModel):
+    """任务配置页按技能动态展示的表单字段声明。"""
+
+    key: str = Field(description="字段键：gate_direction / enter_count / count_line / bypass_line 等")
+    label: str = Field(description="界面显示名")
+    type: str = Field(
+        description="字段类型：select / number / line_draw",
+        examples=["select", "number", "line_draw"],
+    )
+    required: bool = Field(default=False, description="是否必填")
+    default: Optional[Any] = Field(default=None, description="默认值")
+    hint: Optional[str] = Field(default=None, description="辅助说明")
+    options: List[SkillFormFieldOption] = Field(
+        default_factory=list,
+        description="select 类型的选项",
+    )
+    draw_field: Optional[str] = Field(
+        default=None,
+        description="line_draw 时对应绘制目标：count_line / bypass_line",
+    )
+
+
 class SkillInfoResponse(BaseModel):
     """已注册技能信息"""
 
@@ -52,6 +79,10 @@ class SkillInfoResponse(BaseModel):
     cover_image: Optional[str] = Field(
         default=None,
         description="平铺展示封面图路径（前端静态资源，如 /skills/xxx.png）",
+    )
+    form_fields: List[SkillFormField] = Field(
+        default_factory=list,
+        description="任务配置页应展示的参数字段（按技能差异化）",
     )
 
 
@@ -278,6 +309,11 @@ class StreamStartRequest(BaseModel):
         ),
         examples=[_BYPASS_LINE_EXAMPLE],
     )
+    worker_id: Optional[str] = Field(
+        default=None,
+        description="算力 Worker 节点 ID；省略时使用 DEFAULT_WORKER_ID / WORKER_NODES 默认项",
+        examples=["local", "gpu1"],
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -328,6 +364,8 @@ class StreamTaskResponse(BaseModel):
         ],
     )
     pid: Optional[int] = Field(default=None, description="子进程 PID")
+    worker_id: Optional[str] = Field(default=None, description="运行所在 Worker 节点 ID")
+    worker_name: Optional[str] = Field(default=None, description="Worker 显示名")
     created_at: Optional[str] = Field(default=None, description="创建时间（ISO 8601）")
     started_at: Optional[str] = Field(default=None, description="启动时间（ISO 8601）")
     stopped_at: Optional[str] = Field(default=None, description="停止时间（ISO 8601）")

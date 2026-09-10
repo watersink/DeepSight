@@ -97,6 +97,7 @@ def init_db() -> None:
     _ensure_camera_ingest_columns()
     _ensure_task_schedule_column()
     _ensure_task_output_option_columns()
+    _ensure_task_worker_id_column()
     seed_default_admin()
     try:
         with session_scope() as db:
@@ -398,3 +399,31 @@ def _ensure_task_output_option_columns() -> None:
             if name not in cols:
                 conn.execute(text(f"ALTER TABLE `mgmt_task_configs` {ddl}"))
                 logger.info("已为 mgmt_task_configs 增加 %s 列", name)
+
+
+def _ensure_task_worker_id_column() -> None:
+    """补齐任务绑定的 Worker 节点列。"""
+    db_name = (settings.MYSQL_DB or "").strip()
+    if not db_name:
+        return
+    with engine.begin() as conn:
+        cols = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = 'mgmt_task_configs'"
+                ),
+                {"db": db_name},
+            ).fetchall()
+        }
+        if not cols:
+            return
+        if "worker_id" not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE `mgmt_task_configs` "
+                    "ADD COLUMN `worker_id` VARCHAR(64) NOT NULL DEFAULT 'local'"
+                )
+            )
+            logger.info("已为 mgmt_task_configs 增加 worker_id 列")

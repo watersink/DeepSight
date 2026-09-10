@@ -74,6 +74,43 @@ class PersonCountDetector26Skill(BaseSkill):
         ),
         "status": True,
         "required_models": ["yolo26_person"],
+        # 任务配置页按此声明渲染（不声明的技能不展示计数/画线项）
+        "form_fields": [
+            {
+                "key": "gate_direction",
+                "label": "方向",
+                "type": "select",
+                "required": True,
+                "default": "IN",
+                "options": [
+                    {"value": "IN", "label": "IN"},
+                    {"value": "OUT", "label": "OUT"},
+                ],
+            },
+            {
+                "key": "enter_count",
+                "label": "计数初始值",
+                "type": "number",
+                "required": False,
+                "default": 0,
+            },
+            {
+                "key": "count_line",
+                "label": "过线计数线",
+                "type": "line_draw",
+                "draw_field": "count_line",
+                "required": True,
+                "hint": "截图绘制后必填",
+            },
+            {
+                "key": "bypass_line",
+                "label": "绕行线",
+                "type": "line_draw",
+                "draw_field": "bypass_line",
+                "required": False,
+                "hint": "可选",
+            },
+        ],
         "params": {
             "classes": ["person"],
             "target_class_ids": [COCO_PERSON_CLASS_ID],

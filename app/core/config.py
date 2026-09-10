@@ -30,6 +30,29 @@ class Settings(BaseSettings):
     # Triton 推理
     TRITON_URL: str = Field(default="10.1.3.21:8201", description="Triton gRPC 地址 host:port")
 
+    # 远程 Worker（编解码 + 调 Triton）
+    # 格式: id|显示名|url，多项用分号或换行分隔；url=local 表示本机进程内执行
+    # 示例: local|本机|local;gpu1|GPU-1|http://10.1.3.21:8100;gpu2|GPU-2|http://10.1.3.22:8100
+    WORKER_NODES: str = Field(
+        default="local|本机|local",
+        description="Worker 节点列表（id|name|url，分号分隔）",
+    )
+    WORKER_TOKEN: str = Field(
+        default="",
+        description="API 调用 Worker 内部接口的共享密钥（可空=不校验）",
+    )
+    WORKER_HOST: str = Field(default="0.0.0.0", description="worker_main 监听地址")
+    WORKER_PORT: int = Field(default=8100, description="worker_main 监听端口")
+    DEFAULT_WORKER_ID: str = Field(
+        default="local",
+        description="任务未指定 worker_id 时的默认节点",
+    )
+    WORKER_HTTP_TIMEOUT: float = Field(
+        default=30.0,
+        ge=1.0,
+        description="调用远程 Worker HTTP 超时（秒）",
+    )
+
     # ZLMediaKit 流媒体引擎
     ZLM_HOST: str = Field(default="10.1.3.21", description="ZLMediaKit 主机地址")
     ZLM_RTMP_PORT: int = Field(default=1935, description="ZLMediaKit RTMP 端口")
@@ -64,6 +87,10 @@ class Settings(BaseSettings):
     )
     STREAM_QUEUE_SIZE: int = Field(default=4, description="默认帧缓冲队列大小")
     STREAM_USE_HARDWARE_ENCODING: bool = Field(default=True, description="默认是否硬件编码")
+    STREAM_USE_HARDWARE_DECODING: bool = Field(
+        default=True,
+        description="默认是否硬件解码（优先 CUDA/NVDEC，其次 QSV，失败回退 OpenCV）",
+    )
     STREAM_BITRATE: str = Field(default="2M", description="默认推流码率")
     STREAM_BUFFER_SIZE: str = Field(default="2M", description="默认推流缓冲区大小")
     STREAM_RECONNECT_DELAY: float = Field(default=2.0, description="视频源断线重连间隔（秒）")

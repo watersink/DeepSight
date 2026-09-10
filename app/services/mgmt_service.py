@@ -14,7 +14,8 @@ from app.core.config import settings
 from app.db.models import AlertRecord, AlgorithmConfig, Camera, Mine, Site, TaskConfig
 from app.plugins.skill_registry import resolve_skill_class
 from app.services.redis_cache import cache_delete
-from app.services.stream_task_manager import stream_task_manager
+from app.services.runtime_gateway import WorkerApiError, runtime_gateway
+from app.services.worker_nodes import get_worker_node, list_worker_nodes
 from app.services.zlm_client import ZLMClientError, parse_stream_url, zlm_client
 
 logger = logging.getLogger(__name__)
@@ -648,10 +649,23 @@ def delete_algorithm(db: Session, row: AlgorithmConfig) -> None:
 
 # ---------- task configs ----------
 
+def _validate_worker_id(worker_id: Optional[str]) -> str:
+    wid = (worker_id or "").strip() or (settings.DEFAULT_WORKER_ID or "local")
+    known = {n.id for n in list_worker_nodes()}
+    if wid not in known:
+        raise ValueError(f"未知 Worker: {wid}，可选: {', '.join(sorted(known))}")
+    return wid
+
+
 def _enrich_task(row: TaskConfig) -> dict:
     from app.services.task_scheduler import is_within_schedule
 
     schedule = row.schedule
+    worker_id = getattr(row, "worker_id", None) or settings.DEFAULT_WORKER_ID or "local"
+    try:
+        worker_name = get_worker_node(worker_id).name
+    except Exception:
+        worker_name = worker_id
     data = {
         "id": row.id,
         "name": row.name,
@@ -666,6 +680,8 @@ def _enrich_task(row: TaskConfig) -> dict:
         "push_annotated_stream": bool(getattr(row, "push_annotated_stream", False)),
         "schedule": schedule,
         "schedule_active": bool(schedule and schedule.get("enabled") and is_within_schedule(schedule)),
+        "worker_id": worker_id,
+        "worker_name": worker_name,
         "last_runtime_task_id": row.last_runtime_task_id,
         "remark": row.remark,
         "created_at": row.created_at,
@@ -677,9 +693,17 @@ def _enrich_task(row: TaskConfig) -> dict:
         "flv_url": None,
     }
     if row.last_runtime_task_id:
-        task = stream_task_manager.get_task(row.last_runtime_task_id)
-        if task:
-            d = stream_task_manager.enrich_task_dict(task)
+        try:
+            d = runtime_gateway.get_task(row.last_runtime_task_id, worker_id=worker_id)
+        except WorkerApiError:
+            logger.exception(
+                "查询远程任务状态失败 task_cfg=%s runtime=%s worker=%s",
+                row.id,
+                row.last_runtime_task_id,
+                worker_id,
+            )
+            d = None
+        if d:
             data["runtime_status"] = d.get("status")
             if data["push_annotated_stream"]:
                 data["flv_url"] = settings.build_flv_play_url_from_out_url(d.get("out_url"))
@@ -688,6 +712,10 @@ def _enrich_task(row: TaskConfig) -> dict:
                         d["scene_id"], d["skill_name"]
                     )
             data["ingest_branches"] = d.get("ingest_branches")
+            if d.get("worker_id"):
+                data["worker_id"] = d["worker_id"]
+            if d.get("worker_name"):
+                data["worker_name"] = d["worker_name"]
     return data
 
 
@@ -723,6 +751,7 @@ def create_task(db: Session, data: dict) -> dict:
         data["schedule"] = normalize_schedule(data.get("schedule"))
     # 兼容旧请求体中的 alert_rules 字段
     data.pop("alert_rules", None)
+    data["worker_id"] = _validate_worker_id(data.get("worker_id"))
     row = TaskConfig(**data)
     db.add(row)
     db.commit()
@@ -760,6 +789,8 @@ def update_task(db: Session, row: TaskConfig, data: dict) -> dict:
         raise ValueError("算法配置不存在")
     if "schedule" in data:
         data["schedule"] = normalize_schedule(data.get("schedule"))
+    if "worker_id" in data and data["worker_id"] is not None:
+        data["worker_id"] = _validate_worker_id(data.get("worker_id"))
     data.pop("alert_rules", None)
     for k, v in data.items():
         if v is not None or k == "schedule":
@@ -816,8 +847,13 @@ def start_task_config(db: Session, row: TaskConfig) -> dict:
 
     assert_manual_start_allowed(row)
     payload = build_stream_payload(row)
-    runtime = stream_task_manager.start_task(payload)
-    row.last_runtime_task_id = runtime.task_id
+    worker_id = _validate_worker_id(getattr(row, "worker_id", None))
+    try:
+        runtime = runtime_gateway.start_task(payload, worker_id=worker_id)
+    except WorkerApiError as e:
+        raise ValueError(str(e)) from e
+    row.last_runtime_task_id = runtime["task_id"]
+    row.worker_id = worker_id
     db.commit()
     refreshed = get_task(db, row.id)
     return _enrich_task(refreshed)
@@ -826,7 +862,11 @@ def start_task_config(db: Session, row: TaskConfig) -> dict:
 def stop_task_config(db: Session, row: TaskConfig) -> dict:
     if not row.last_runtime_task_id:
         raise ValueError("该任务尚未启动过运行时实例")
-    stream_task_manager.stop_task(row.last_runtime_task_id)
+    worker_id = getattr(row, "worker_id", None) or settings.DEFAULT_WORKER_ID
+    try:
+        runtime_gateway.stop_task(row.last_runtime_task_id, worker_id=worker_id)
+    except WorkerApiError as e:
+        raise ValueError(str(e)) from e
     refreshed = get_task(db, row.id)
     return _enrich_task(refreshed)
 

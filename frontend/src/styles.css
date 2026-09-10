@@ -552,6 +552,20 @@ select option {
   margin: 4px 0 0;
   font-size: 12px;
 }
+.skill-tile-workers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.worker-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.badge.worker-tag {
+  font-weight: 500;
+}
 
 .page-head {
   display: flex; justify-content: space-between; align-items: end;

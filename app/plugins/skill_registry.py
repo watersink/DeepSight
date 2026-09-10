@@ -42,6 +42,8 @@ def list_available_skills() -> List[Dict[str, Any]]:
             "required_models": cfg.get("required_models", []),
             "cover_image": cfg.get("cover_image")
             or f"/skills/{cfg.get('name')}.png",
+            # 任务配置表单按此声明渲染；未声明则不展示计数/画线等专用项
+            "form_fields": cfg.get("form_fields") or [],
         })
     return result
 

@@ -12,6 +12,7 @@
 - **异步处理管道**：检测、推流、告警分线程执行
 - **ZLMediaKit 流媒体**：推流目标为 ZLMediaKit，支持 RTMP / RTSP 及 HTTP-FLV、HLS 等播放
 - **多协议推流**：经 FFmpeg 向 ZLMediaKit 推流，由流媒体服务分发；任务响应返回 `out_url` 与对应 `flv_url`
+- **远程 Worker**：支持 API/前端与编解码+Triton 分机部署；任务可绑定指定 Worker
 - **硬件编码**：可选 NVENC（`h264_nvenc`），失败时回退软件编码
 - **Swagger 文档**：内置 `/docs` 交互式 API 文档
 - **自动化测试**：`app/auto_unit_test/run_tests.py` 一键执行技能、服务端、客户端、本地推流测试
@@ -19,41 +20,69 @@
 ## 系统架构
 
 ```
-客户端 / CLI
+客户端 / 管理台前端
     │
     ▼
-FastAPI (main.py)
-    ├── GET  /health
-    ├── GET  /api/v1/skills
-    ├── POST /api/v1/streams/*  ──► stream_task_manager ──► 子进程推流
-    └── POST /api/v1/clip/capture ──► video_clip_service ──► ZLMediaKit startRecordTask
+FastAPI (app.main)  ← CPU 机：鉴权 / CRUD / 调度 / 选 Worker
+    ├── GET  /api/v1/workers
+    ├── POST /api/v1/task-configs/{id}/start  ──► runtime_gateway
+    └── POST /api/v1/streams/*                ──► runtime_gateway
                                               │
-                                              ▼
-                              VideoStreamPipeline（推流任务）
-                    ┌───────────┼───────────┐
-                    ▼           ▼           ▼
-              FrameReader  AsyncProcessor  FFmpegStreamer
-              (OpenCV)     ├ 检测线程      (RTMP/RTSP 推流)
-                           ├ 推流线程          │
-                           └ 告警线程          ▼
-                                │      ZLMediaKit 流媒体服务
-                                ▼      (RTMP/RTSP/HTTP-FLV/HLS/事件录像...)
-                         Skill ──gRPC──► Triton Inference Server
-                                              (TensorRT 模型仓库)
+                    ┌─────────────────────────┼─────────────────────────┐
+                    ▼                         ▼                         ▼
+              local 本机进程            Worker-1 (app.worker_main)  Worker-2
+              stream_task_manager       解码+技能+FFmpeg编码         （同构副本）
+                    │                         │
+                    └────────────┬────────────┘
+                                 ▼
+                           Triton / ZLMediaKit
 ```
+
+### 远程 Worker 部署（可选）
+
+同一仓库两个入口：
+
+| 角色 | 启动 | 职责 |
+|------|------|------|
+| API | `python -m app.main` | 前后端、任务配置、调度，按 `worker_id` 调用算力节点 |
+| Worker | `python -m app.worker_main` | 解码、调 Triton、编码推流 |
+
+`.env` 示例（1 台 API + 2 台同构 GPU）：
+
+```env
+# API 机
+WORKER_NODES=gpu1|GPU-1|http://10.1.3.21:8100;gpu2|GPU-2|http://10.1.3.22:8100
+DEFAULT_WORKER_ID=gpu1
+WORKER_TOKEN=change-me
+
+# 每台 GPU 机同样配置 WORKER_TOKEN / TRITON_URL / ZLM_* / MySQL 等
+# 并启动: python -m app.worker_main
+```
+
+单机全部署保持默认即可：
+
+```env
+WORKER_NODES=local|本机|local
+DEFAULT_WORKER_ID=local
+```
+
+管理台「任务配置」可选择摄像头、Worker 与该 Worker 下的算法技能。
 
 ## 目录结构
 
 ```
 code/
 ├── app/
-│   ├── main.py                          # FastAPI 入口（Swagger / OpenAPI）
+│   ├── main.py                          # API / 前端入口
+│   ├── worker_main.py                   # 远程 Worker 入口（编解码 + 调 Triton）
 │   ├── core/
-│   │   └── config.py                    # 环境配置
+│   │   └── config.py                    # 环境配置（含 WORKER_NODES）
 │   ├── api/
 │   │   ├── schemas.py                   # 请求/响应模型
 │   │   └── routes/
 │   │       ├── streams.py               # AI 视频识别任务 API
+│   │       ├── workers.py               # Worker 节点列表 / 技能
+│   │       ├── worker_internal.py       # Worker 内部启停 API
 │   │       ├── skills.py                # 技能查询 API
 │   │       └── clip.py                  # 事件视频截取 API
 │   ├── client_scripts/
@@ -68,6 +97,8 @@ code/
 │   │       ├── person_count_detector_skill.py
 │   │       └── person_count_detector26_skill.py
 │   ├── services/
+│   │   ├── runtime_gateway.py           # 本机 / 远程 Worker 统一启停
+│   │   ├── worker_nodes.py              # Worker 节点配置解析
 │   │   ├── stream_task_manager.py       # 多进程任务管理
 │   │   ├── stream_worker.py             # 子进程入口
 │   │   ├── stream_alert.py              # 默认告警处理

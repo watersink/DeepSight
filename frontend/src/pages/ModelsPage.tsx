@@ -31,6 +31,7 @@ export default function ModelsPage() {
   }, []);
 
   const items = data?.items || [];
+  const workers = data?.workers || [];
   const paged = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return items.slice(start, start + PAGE_SIZE);
@@ -41,7 +42,9 @@ export default function ModelsPage() {
       <div className="page-head">
         <div>
           <h1>模型管理</h1>
-          <p>从 Triton Inference Server 拉取本机已部署模型（repository index）。</p>
+          <p>
+            汇总各算力 Worker 上 Triton 已部署的模型，并标注部署在哪台机器。
+          </p>
         </div>
         <button className="btn" onClick={load} disabled={loading}>
           {loading ? "刷新中…" : "刷新"}
@@ -53,11 +56,11 @@ export default function ModelsPage() {
       <div className="card page-meta-card">
         <div className="form-grid">
           <label>
-            Triton 地址
+            Triton 地址（汇总）
             <input readOnly value={data?.server_url || "-"} />
           </label>
           <label>
-            服务状态
+            整体状态
             <input
               readOnly
               value={
@@ -70,14 +73,31 @@ export default function ModelsPage() {
             />
           </label>
           <label>
-            服务名
-            <input readOnly value={data?.server_name || "-"} />
+            Worker 节点数
+            <input readOnly value={String(workers.length || 0)} />
           </label>
           <label>
-            Triton 版本
-            <input readOnly value={data?.server_version || "-"} />
+            模型数
+            <input readOnly value={String(items.length || 0)} />
           </label>
         </div>
+        {!!workers.length && (
+          <div className="worker-tag-row" style={{ marginTop: 12 }}>
+            {workers.map((w: any) => (
+              <span
+                key={w.worker_id}
+                className={`badge worker-tag ${
+                  w.online === false ? "stop" : w.online ? "run" : ""
+                }`}
+                title={w.server_url || w.error || w.worker_id}
+              >
+                {w.worker_name || w.worker_id}
+                {w.online === false ? " · 离线" : ""}
+                {w.server_url ? ` · ${w.server_url}` : ""}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card page-list-card">
@@ -89,6 +109,7 @@ export default function ModelsPage() {
                 <th>版本</th>
                 <th>仓库状态</th>
                 <th>就绪</th>
+                <th>部署机器</th>
               </tr>
             </thead>
             <tbody>
@@ -102,14 +123,35 @@ export default function ModelsPage() {
                       {m.ready ? "就绪" : "未就绪"}
                     </span>
                   </td>
+                  <td>
+                    {(m.workers || []).length ? (
+                      <div className="worker-tag-row">
+                        {(m.workers || []).map((w: any) => (
+                          <span
+                            key={w.worker_id}
+                            className={`badge worker-tag ${
+                              w.ready ? "run" : "stop"
+                            }`}
+                            title={w.triton_url || w.worker_id}
+                          >
+                            {w.worker_name || w.worker_id}
+                            {w.triton_url ? ` · ${w.triton_url}` : ""}
+                            {w.ready ? "" : " · 未就绪"}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {!paged.length && (
                 <tr>
-                  <td colSpan={4} className="muted">
+                  <td colSpan={5} className="muted">
                     {loading
                       ? "加载中…"
-                      : "暂无模型。请确认 Triton 已启动且仓库中有模型。"}
+                      : "暂无模型。请确认各 Worker 的 Triton 已启动且仓库中有模型。"}
                   </td>
                 </tr>
               )}

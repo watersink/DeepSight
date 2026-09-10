@@ -138,6 +138,7 @@ export const api = {
       server_name?: string | null;
       server_version?: string | null;
       items: any[];
+      workers?: any[];
       error?: string | null;
     }>("/api/v1/models"),
 
@@ -158,6 +159,13 @@ export const api = {
   stopTask: (id: number) =>
     request(`/api/v1/task-configs/${id}/stop`, { method: "POST" }),
 
+  getWorkers: () => request<{ items: any[]; total: number }>("/api/v1/workers"),
+  getWorkerSkills: (workerId: string) =>
+    request<{ worker_id: string; skills: any[] }>(
+      `/api/v1/workers/${encodeURIComponent(workerId)}/skills`
+    ),
+  getWorkerModels: (workerId: string) =>
+    request<any>(`/api/v1/workers/${encodeURIComponent(workerId)}/models`),
   getAlerts: (opts?: {
     status?: string;
     sceneId?: string;

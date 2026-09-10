@@ -86,7 +86,17 @@ class AsyncFrameProcessor:
         self.running = True
 
         if self.streamer and not self.streamer.start():
-            raise RuntimeError("推流器启动失败")
+            detail = ""
+            try:
+                detail = (self.streamer.stats or {}).get("last_error") or ""
+            except Exception:
+                detail = ""
+            if detail:
+                raise RuntimeError(f"推流器启动失败: {detail[:800]}")
+            raise RuntimeError(
+                "推流器启动失败（常见原因：未安装 FFmpeg、NVENC 不可用、"
+                "无法连接推流地址 ZLM）。请查看上方 FFmpeg 相关日志。"
+            )
 
         self._detection_thread = threading.Thread(
             target=self._detection_worker, daemon=True,
