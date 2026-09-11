@@ -2,7 +2,7 @@
 视频帧读取器 - 参考 smart_engine 采集循环
 
 支持 RTSP/RTMP/本地文件，断线重连与降帧采样。
-解码优先：CUDA/NVDEC → QSV → OpenCV 软解。
+解码优先：CUDA/NVDEC → QSV(可用时) → FFmpeg 软解 → OpenCV。
 """
 from __future__ import annotations
 
@@ -18,8 +18,9 @@ import numpy as np
 from app.core.config import settings
 from app.services.video.decoder import (
     build_ffmpeg_decode_command,
+    list_ffmpeg_decode_backends,
+    mark_decode_backend_unavailable,
     probe_stream_meta,
-    select_hw_decode_backend,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,8 +48,9 @@ class FrameReader:
 
         self._cap: Optional[cv2.VideoCapture] = None
         self._ffmpeg: Optional[subprocess.Popen] = None
-        self._backend: str = "opencv"  # cuda | qsv | opencv
+        self._backend: str = "opencv"  # cuda | qsv | soft | opencv
         self._frame_nbytes = 0
+        self._failed_backends: set[str] = set()
 
         self._source_fps = self.target_fps
         self._width = 0
@@ -155,7 +157,7 @@ class FrameReader:
         width, height, fps = probe_stream_meta(self.source_url)
         if width <= 0 or height <= 0:
             logger.warning(
-                "硬解前探测分辨率失败，回退 OpenCV: %s", self.source_url
+                "FFmpeg 解码前探测分辨率失败: %s", self.source_url
             )
             return False
 
@@ -167,7 +169,8 @@ class FrameReader:
         self._frame_counter = 0
 
         cmd = build_ffmpeg_decode_command(self.source_url, backend)
-        logger.info("启动 FFmpeg 硬解(%s): %s", backend, " ".join(cmd))
+        label = "软解" if backend == "soft" else f"硬解({backend})"
+        logger.info("启动 FFmpeg %s: %s", label, " ".join(cmd))
         try:
             flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
             self._ffmpeg = subprocess.Popen(
@@ -179,10 +182,10 @@ class FrameReader:
                 creationflags=flags,
             )
         except FileNotFoundError:
-            logger.error("FFmpeg 未安装或不在 PATH，无法硬解")
+            logger.error("FFmpeg 未安装或不在 PATH，无法解码")
             return False
         except Exception:
-            logger.exception("启动 FFmpeg 硬解失败")
+            logger.exception("启动 FFmpeg 解码失败")
             return False
 
         self._stderr_thread = threading.Thread(
@@ -195,13 +198,13 @@ class FrameReader:
         time.sleep(0.3)
         if self._ffmpeg.poll() is not None:
             err = self._last_ffmpeg_error or "进程已退出"
-            logger.error("FFmpeg 硬解启动失败(%s): %s", backend, err)
+            logger.error("FFmpeg 解码启动失败(%s): %s", backend, err)
             self._close_ffmpeg()
             return False
 
         self._backend = backend
         logger.info(
-            "视频源(硬解 %s): %s, %dx%d, 源帧率=%.1f, 目标=%.1f, 采样步长=%d",
+            "视频源(FFmpeg %s): %s, %dx%d, 源帧率=%.1f, 目标=%.1f, 采样步长=%d",
             backend.upper(),
             self.source_url,
             self._width,
@@ -213,15 +216,29 @@ class FrameReader:
         return True
 
     def open(self) -> bool:
-        backend = select_hw_decode_backend(self.use_hardware_decoding)
-        if backend:
+        for backend in list_ffmpeg_decode_backends(self.use_hardware_decoding):
+            if backend in self._failed_backends:
+                continue
             if self._open_ffmpeg(backend):
                 return True
-            logger.warning("硬解(%s)失败，回退 OpenCV 软解", backend)
+            self._failed_backends.add(backend)
+            if backend in {"cuda", "qsv"}:
+                mark_decode_backend_unavailable(backend)
+            logger.warning("FFmpeg 后端 %s 失败，尝试下一后端", backend)
 
+        logger.warning("所有 FFmpeg 解码后端失败，回退 OpenCV")
         return self._open_opencv()
 
     def _reconnect(self) -> bool:
+        # 硬解运行时崩溃：拉黑后换后端，避免 QSV/CUDA 死循环
+        # soft/opencv 多为断流，不拉黑，允许同后端重连
+        if self._backend in {"cuda", "qsv"}:
+            self._failed_backends.add(self._backend)
+            mark_decode_backend_unavailable(self._backend)
+            logger.warning(
+                "硬解后端 %s 运行失败，后续重连将跳过", self._backend
+            )
+
         self._close_ffmpeg()
         self._close_opencv()
         logger.warning(
@@ -269,7 +286,7 @@ class FrameReader:
             time.sleep(max(0.001, self.frame_interval - (now - self._last_frame_time)))
 
         while True:
-            if self._backend in {"cuda", "qsv"}:
+            if self._backend in {"cuda", "qsv", "soft"}:
                 if self._ffmpeg is None or self._ffmpeg.poll() is not None:
                     if not self._reconnect():
                         return None

@@ -6,6 +6,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, joinedload
@@ -16,7 +17,14 @@ from app.plugins.skill_registry import resolve_skill_class
 from app.services.redis_cache import cache_delete
 from app.services.runtime_gateway import WorkerApiError, runtime_gateway
 from app.services.worker_nodes import get_worker_node, list_worker_nodes
-from app.services.zlm_client import ZLMClientError, parse_stream_url, zlm_client
+from app.services.zlm_client import (
+    ZLMClientError,
+    build_zlm_snap_candidates,
+    is_rtsp_url,
+    parse_stream_url,
+    resolve_snap_urls_from_raw,
+    zlm_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +404,86 @@ def _default_zlm_stream_id(data: dict) -> str:
     name = str(data.get("name") or "cam").strip()
     slug = re.sub(r"[^0-9A-Za-z_\-]", "_", name)[:40] or "cam"
     return f"{slug}_{uuid.uuid4().hex[:8]}"
+
+
+def _url_host_is_zlm(url: str) -> bool:
+    host = (urlparse(url).hostname or "").strip().lower()
+    zlm = (settings.ZLM_HOST or "").strip().lower()
+    return bool(host) and host in {zlm, "127.0.0.1", "localhost", "::1"}
+
+
+def resolve_camera_snap_urls(db: Session, camera: Camera) -> List[str]:
+    """
+    任务画线截图：一律优先 ZLM 上的 RTMP / HTTP-FLV。
+
+    - 已有 zlm_app/zlm_stream：直接拼 RTMP→FLV
+    - proxy 或 in_url 为外部 RTSP：先 addStreamProxy，再截 ZLM 流
+    - in_url 为 ZLM 上的 RTSP：改写为同名 RTMP/FLV，不直截 RTSP
+    """
+    app = str(camera.zlm_app or "").strip()
+    stream = str(camera.zlm_stream or "").strip()
+    in_url = str(camera.in_url or "").strip()
+    source = str(camera.source_url or "").strip()
+    mode = str(camera.ingest_mode or "push").strip().lower()
+
+    if not app or not stream:
+        parsed = parse_stream_url(in_url) or parse_stream_url(source)
+        if parsed:
+            app = app or parsed["app"]
+            stream = stream or parsed["stream"]
+
+    # 需要拉进 ZLM 的原始 RTSP（摄像头直连）
+    rtsp_src = ""
+    if mode == "proxy" and source and is_rtsp_url(source):
+        rtsp_src = source
+    elif in_url and is_rtsp_url(in_url) and not _url_host_is_zlm(in_url):
+        rtsp_src = in_url
+
+    if rtsp_src:
+        app = app or "live"
+        if not stream:
+            stream = _default_zlm_stream_id(
+                {
+                    "camera_code": camera.camera_code,
+                    "name": camera.name or f"cam_{camera.id}",
+                }
+            )
+        # 无代理或地址变了：重新 addStreamProxy
+        need_proxy = True
+        if camera.proxy_key and mode == "proxy" and source == rtsp_src:
+            need_proxy = False
+        if need_proxy or not camera.proxy_key:
+            key = zlm_client.add_stream_proxy(
+                app,
+                stream,
+                rtsp_src,
+                rtp_type=0,  # TCP
+                timeout_sec=15.0,
+                auto_close=False,
+            )
+            camera.zlm_app = app
+            camera.zlm_stream = stream
+            camera.proxy_key = key
+            camera.ingest_mode = "proxy"
+            camera.source_url = rtsp_src
+            camera.in_url = settings.build_zlm_pull_url(
+                app, stream, output_format="rtmp"
+            )
+            db.add(camera)
+            db.commit()
+            db.refresh(camera)
+            logger.info(
+                "截图前已确保 ZLM 代理 camera_id=%s app=%s stream=%s",
+                camera.id,
+                app,
+                stream,
+            )
+
+    return build_zlm_snap_candidates(
+        app=app,
+        stream=stream,
+        fallback_url=camera.in_url or in_url,
+    )
 
 
 def _prepare_camera_stream_fields(

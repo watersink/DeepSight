@@ -31,6 +31,7 @@ from app.services.video.encoder import check_nvenc_available
 from app.services.video.decoder import (
     check_cuda_hwaccel_available,
     check_qsv_hwaccel_available,
+    list_ffmpeg_decode_backends,
     select_hw_decode_backend,
 )
 
@@ -51,5 +52,6 @@ __all__ = [
     "check_nvenc_available",
     "check_cuda_hwaccel_available",
     "check_qsv_hwaccel_available",
+    "list_ffmpeg_decode_backends",
     "select_hw_decode_backend",
 ]

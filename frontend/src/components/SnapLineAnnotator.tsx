@@ -151,7 +151,7 @@ export default function SnapLineAnnotator({
         setLoading(false);
         return;
       }
-      q.set("timeout_sec", "10");
+      q.set("timeout_sec", "15");
       q.set("expire_sec", "30");
       const token = getToken();
       const res = await fetch(`/api/v1/zlm/snap?${q}`, {

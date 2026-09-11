@@ -4,7 +4,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 from app.core.config import settings
@@ -48,6 +48,76 @@ def parse_stream_url(in_url: str) -> Optional[Dict[str, str]]:
         "app": app,
         "stream": stream,
     }
+
+
+def _hostname_is_zlm(hostname: Optional[str]) -> bool:
+    if not hostname:
+        return False
+    host = hostname.strip().lower()
+    zlm = (settings.ZLM_HOST or "").strip().lower()
+    return host in {zlm, "127.0.0.1", "localhost", "::1"}
+
+
+def is_rtsp_url(url: str) -> bool:
+    scheme = (urlparse((url or "").strip()).scheme or "").lower()
+    return scheme in {"rtsp", "rtsps"}
+
+
+def build_zlm_snap_candidates(
+    *,
+    app: str = "",
+    stream: str = "",
+    fallback_url: str = "",
+) -> List[str]:
+    """
+    getSnap 候选地址：优先 ZLM RTMP，其次 HTTP-FLV；避免直接截 RTSP。
+    """
+    out: List[str] = []
+    app_s = (app or "").strip().strip("/")
+    stream_s = (stream or "").strip().strip("/")
+    if app_s and stream_s:
+        out.append(settings.build_zlm_pull_url(app_s, stream_s, output_format="rtmp"))
+        out.append(settings.build_flv_play_url(app_s, stream_s))
+
+    fb = (fallback_url or "").strip()
+    if fb:
+        parsed = parse_stream_url(fb)
+        if parsed:
+            # 任意协议只要能解析出 app/stream，都改写为 RTMP / FLV
+            out.append(
+                settings.build_zlm_pull_url(
+                    parsed["app"], parsed["stream"], output_format="rtmp"
+                )
+            )
+            out.append(settings.build_flv_play_url(parsed["app"], parsed["stream"]))
+        # 非 RTSP 的原始地址也可作为最后兜底（如已是 rtmp/http）
+        if not is_rtsp_url(fb):
+            out.append(fb)
+
+    # 去重保序
+    seen = set()
+    uniq: List[str] = []
+    for u in out:
+        if u and u not in seen:
+            seen.add(u)
+            uniq.append(u)
+    return uniq
+
+
+def resolve_snap_urls_from_raw(url: str) -> List[str]:
+    """仅给了 url（无摄像头记录）时，把 RTSP 改写为 ZLM RTMP/FLV。"""
+    raw = (url or "").strip()
+    if not raw:
+        return []
+    parsed = parse_stream_url(raw)
+    if parsed and (is_rtsp_url(raw) or _hostname_is_zlm(urlparse(raw).hostname)):
+        return build_zlm_snap_candidates(
+            app=parsed["app"], stream=parsed["stream"], fallback_url=raw
+        )
+    if is_rtsp_url(raw):
+        # 外部摄像头 RTSP 且无法解析 app/stream：无法安全改写，原样返回（调用方应走 proxy）
+        return [raw]
+    return build_zlm_snap_candidates(fallback_url=raw) or [raw]
 
 
 class ZLMClient:
@@ -331,6 +401,41 @@ class ZLMClient:
                 data[:16],
             )
         return data
+
+    def get_snap_prefer_zlm(
+        self,
+        urls: List[str],
+        *,
+        timeout_sec: int = 10,
+        expire_sec: int = 30,
+    ) -> bytes:
+        """
+        按候选列表依次 getSnap（通常 RTMP → HTTP-FLV），全部失败再抛错。
+        """
+        candidates = [u.strip() for u in (urls or []) if (u or "").strip()]
+        if not candidates:
+            raise ZLMClientError("getSnap 无可用流地址")
+
+        errors: List[str] = []
+        for idx, target in enumerate(candidates):
+            try:
+                logger.info(
+                    "getSnap 尝试 [%d/%d] url=%s",
+                    idx + 1,
+                    len(candidates),
+                    target[:160],
+                )
+                return self.get_snap(
+                    target, timeout_sec=timeout_sec, expire_sec=expire_sec
+                )
+            except ZLMClientError as e:
+                errors.append(f"{target}: {e}")
+                logger.warning("getSnap 失败 url=%s err=%s", target[:160], e)
+
+        raise ZLMClientError(
+            "getSnap 全部候选失败（已优先 RTMP/HTTP-FLV，避免直截 RTSP）。"
+            + " | ".join(errors[:3])
+        )
 
 
 zlm_client = ZLMClient()

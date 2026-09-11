@@ -49,7 +49,11 @@ from app.services.webhook_dispatch import (
     build_webhook_payload,
     deliver_webhook,
 )
-from app.services.zlm_client import ZLMClientError, zlm_client
+from app.services.zlm_client import (
+    ZLMClientError,
+    resolve_snap_urls_from_raw,
+    zlm_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,35 +81,49 @@ def list_models():
     summary="ZLM 实时截图",
     description=(
         "代理 ZLMediaKit `/index/api/getSnap`，返回 JPEG。"
-        "前端用摄像头 `in_url`（RTMP/RTSP）拉一张底图做线段标注。"
+        "优先使用 ZLM 上的 RTMP / HTTP-FLV；摄像头为 RTSP 时先走 addStreamProxy，"
+        "避免直接对 RTSP 截图。"
     ),
     responses={200: {"content": {"image/jpeg": {}}}},
 )
 def get_zlm_snap(
     db: Annotated[Session, Depends(get_db)],
     url: str = Query("", description="需要截图的流地址，如 rtmp://host/app/stream"),
-    timeout_sec: int = Query(10, ge=1, le=60),
+    timeout_sec: int = Query(15, ge=1, le=60),
     expire_sec: int = Query(30, ge=1, le=600),
     camera_id: Optional[int] = Query(
-        None, description="可选：传摄像头 ID 时优先用其 in_url"
+        None, description="可选：传摄像头 ID 时按摄像头解析 ZLM RTMP/FLV"
     ),
 ):
-    snap_url = (url or "").strip()
+    candidates: list[str] = []
     if camera_id is not None:
         row = svc.get_camera(db, camera_id)
         if not row:
             raise HTTPException(status_code=404, detail="摄像头不存在")
-        snap_url = (row.in_url or "").strip()
-    if not snap_url:
-        raise HTTPException(status_code=400, detail="url 或 camera_id 必填其一")
+        try:
+            candidates = svc.resolve_camera_snap_urls(db, row)
+        except ZLMClientError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.exception("准备截图流失败 camera_id=%s", camera_id)
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        snap_url = (url or "").strip()
+        if not snap_url:
+            raise HTTPException(status_code=400, detail="url 或 camera_id 必填其一")
+        candidates = resolve_snap_urls_from_raw(snap_url)
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail="无法解析可用的截图流地址")
+
     try:
-        data = zlm_client.get_snap(
-            snap_url, timeout_sec=timeout_sec, expire_sec=expire_sec
+        data = zlm_client.get_snap_prefer_zlm(
+            candidates, timeout_sec=timeout_sec, expire_sec=expire_sec
         )
     except ZLMClientError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("getSnap 失败 url=%s", snap_url)
+        logger.exception("getSnap 失败 candidates=%s", candidates)
         raise HTTPException(status_code=500, detail=str(e))
     return Response(content=data, media_type="image/jpeg")
 
