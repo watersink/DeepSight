@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import List, Optional, Tuple
 
 from sqlalchemy import func, select
@@ -53,9 +52,7 @@ def authenticate(db: Session, username: str, password: str) -> Optional[User]:
         return None
     if not verify_password(password, user.password_hash):
         return None
-    user.last_login_at = datetime.now()
-    db.commit()
-    db.refresh(user)
+    # 不在登录关键路径写库：避免 mgmt_users 行锁/InnoDB 异常时登录一直卡住
     return user
 
 

@@ -4,22 +4,27 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _to_bytes(value: str) -> bytes:
+    # bcrypt 最长 72 字节
+    return (value or "").encode("utf-8")[:72]
 
 
 def hash_password(password: str) -> str:
-    # bcrypt 最长 72 字节
-    return pwd_context.hash((password or "")[:72])
+    hashed = bcrypt.hashpw(_to_bytes(password), bcrypt.gensalt())
+    return hashed.decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return pwd_context.verify((plain or "")[:72], hashed)
+        if not hashed:
+            return False
+        return bcrypt.checkpw(_to_bytes(plain), hashed.encode("utf-8"))
     except Exception:
         return False
 
