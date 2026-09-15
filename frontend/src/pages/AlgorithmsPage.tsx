@@ -4,6 +4,7 @@ import Pager from "../components/Pager";
 import coverCount from "../assets/skills/person_count_detector.png";
 import coverCount26 from "../assets/skills/person_count_detector26.png";
 import coverPresence26 from "../assets/skills/person_presence_detector26.png";
+import coverBoarding from "../assets/skills/boarding_detector.png";
 
 const PAGE_SIZE = 10;
 type ViewMode = "list" | "tile";
@@ -13,6 +14,7 @@ const COVER_BY_SKILL: Record<string, string> = {
   person_count_detector: coverCount,
   person_count_detector26: coverCount26,
   person_presence_detector26: coverPresence26,
+  boarding_detector: coverBoarding,
 };
 
 function coverOf(s: any): string {

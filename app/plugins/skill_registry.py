@@ -2,6 +2,7 @@
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Type
 
+from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.person_count_detector26_skill import PersonCountDetector26Skill
 from app.plugins.skills.person_count_detector_skill import PersonCountDetectorSkill
 from app.plugins.skills.person_presence_detector26_skill import PersonPresenceDetector26Skill
@@ -22,6 +23,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     PersonCountDetectorSkill.DEFAULT_CONFIG["name"]: PersonCountDetectorSkill,
     PersonCountDetector26Skill.DEFAULT_CONFIG["name"]: PersonCountDetector26Skill,
     PersonPresenceDetector26Skill.DEFAULT_CONFIG["name"]: PersonPresenceDetector26Skill,
+    BoardingDetectorSkill.DEFAULT_CONFIG["name"]: BoardingDetectorSkill,
 }
 
 

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400" fill="none">
+  <defs>
+    <linearGradient id="bgBd" x1="0" y1="0" x2="640" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14201a"/>
+      <stop offset="1" stop-color="#0c1210"/>
+    </linearGradient>
+    <linearGradient id="truckBd" x1="180" y1="80" x2="520" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2a3a32"/>
+      <stop offset="1" stop-color="#1a2420"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="400" fill="url(#bgBd)"/>
+  <rect x="36" y="28" width="568" height="344" rx="18" stroke="#2c3832" stroke-width="2" fill="#171e1b"/>
+
+  <!-- mine vehicle rear body -->
+  <rect x="200" y="95" width="280" height="200" rx="8" fill="url(#truckBd)" stroke="#3d9b6e" stroke-width="3"/>
+  <!-- open rear doors -->
+  <path d="M200 100 L150 130 L150 280 L200 290 Z" fill="#1e2723" stroke="#2c3832" stroke-width="2"/>
+  <path d="M480 100 L530 130 L530 280 L480 290 Z" fill="#1e2723" stroke="#2c3832" stroke-width="2"/>
+
+  <!-- cabin zone -->
+  <path d="M230 250 L450 250 L430 300 L250 300 Z" fill="rgba(61,155,110,0.18)" stroke="#3d9b6e" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="340" y="280" text-anchor="middle" fill="#3d9b6e" font-family="Segoe UI, sans-serif" font-size="14" font-weight="600">CABIN ZONE</text>
+
+  <!-- door threshold line -->
+  <path d="M220 300 H460" stroke="#f0a040" stroke-width="5" stroke-linecap="round"/>
+  <text x="470" y="306" fill="#f0a040" font-family="Segoe UI, sans-serif" font-size="14" font-weight="600">DOOR</text>
+
+  <!-- boarded person (green box) -->
+  <rect x="270" y="160" width="56" height="100" rx="4" stroke="#3d9b6e" stroke-width="3" fill="rgba(61,155,110,0.12)"/>
+  <circle cx="298" cy="185" r="12" fill="#b7ebc9"/>
+  <path d="M298 200 v40 M282 215 h32 M286 260 l12-20 12 20" stroke="#b7ebc9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- boarding person (orange box) -->
+  <rect x="360" y="175" width="52" height="95" rx="4" stroke="#f0a040" stroke-width="3" fill="rgba(240,160,64,0.12)"/>
+  <circle cx="386" cy="198" r="11" fill="#f0a040"/>
+  <path d="M386 212 v36 M372 226 h28 M376 268 l10-18 10 18" stroke="#f0a040" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- count badge -->
+  <rect x="500" y="120" width="90" height="90" rx="14" fill="#1e2723" stroke="#2c3832"/>
+  <text x="545" y="155" text-anchor="middle" fill="#8fa099" font-family="Segoe UI, sans-serif" font-size="12">boarding</text>
+  <text x="545" y="192" text-anchor="middle" fill="#b7ebc9" font-family="Segoe UI, sans-serif" font-size="36" font-weight="700">2</text>
+
+  <text x="48" y="58" fill="#e8eee9" font-family="Segoe UI, sans-serif" font-size="22" font-weight="650">
+f∫pﬂ°</text>
+  <text x="48" y="84" fill="#8fa099" font-family="Segoe UI, sans-serif" font-size="14">cabin_zone ∑ boarding YOLO26</text>
+</svg>
