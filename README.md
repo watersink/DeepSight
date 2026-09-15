@@ -242,10 +242,23 @@ docker run --gpus "device=0" -itd `
 > **说明**
 >
 > - `-v ...:/models`：模型仓库路径，需包含符合 Triton 规范的模型目录结构（Linux 示例为 `yolo11_TensorRT/`，Windows 示例为 `yolo26/`）
-> - `--model-control-mode=explicit`：显式加载模型；`--load-model=`* 加载仓库中全部模型
+> - `--model-control-mode=explicit`：显式模型控制模式。**管理台「模型管理」中的加载 / 卸载 / 删除依赖此模式**；默认 `none` 模式下 Triton 的 Load/Unload API 会报错且不生效
+> - `--load-model=*`：启动时加载仓库中全部模型（仅在 `explicit` 模式下有效）
 > - `--gpus "device=0"` / `--gpus '"device=4"'`：绑定指定 GPU，多卡环境请替换为实际设备编号
 > - Windows 下路径使用 `-v "C:\path\to\models:/models"`，PowerShell 换行用反引号 ```
 > - 应用侧 `TRITON_URL` 应指向宿主机映射的 gRPC 端口，即 `主机IP:8201`
+
+### 模型控制模式（Load / Unload）
+
+管理台「模型管理」通过 Triton 自带的 [Model Repository Extension](https://docs.nvidia.com/deeplearning/triton-inference-server/user-guide/docs/protocol/extension_model_repository.html) 提供：
+
+| 操作 | Triton API | 说明 |
+|------|------------|------|
+| 加载 | `POST .../v2/repository/models/{name}/load` | 加载或重新加载模型 |
+| 卸载 | `POST .../v2/repository/models/{name}/unload` | 从内存卸载，仓库文件保留 |
+| 删除 | Unload + `unload_dependents=true` | Triton **无删文件接口**；此处为卸载模型及其依赖 |
+
+**注意：** Triton 需以 `--model-control-mode=explicit` 启动，Load/Unload 才会生效；默认 `none` 模式会报错。部署示例见上文 Docker 命令。
 
 ### 端口说明
 
@@ -830,6 +843,12 @@ _SKILL_CLASSES = {
 - 确认所用技能对应模型（如 `yolo11_person` / `yolo26_person`）已在 Triton 中加载
 - 检查 GPU 驱动与 `nvidia-container-toolkit` 是否正常
 - 可用 `curl http://<主机>:8200/v2/health/ready` 检查 Triton HTTP 健康状态
+
+**模型管理中加载 / 卸载失败**
+
+- Triton 需以 `--model-control-mode=explicit` 启动，Load/Unload 才会生效；默认 `none` 模式会报错
+- 确认启动参数包含 `--model-control-mode=explicit`（可配合 `--load-model=*` 在启动时加载全部模型）
+- Triton **没有删除仓库文件的官方接口**；管理台「删除」对应 Unload 并开启 `unload_dependents`
 
 **RTMP 推流失败或播放器无法播放**
 

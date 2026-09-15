@@ -27,6 +27,86 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
 }
 
 
+# 算法管理详情弹窗：展示 params 中的业务/检测关键项，省略内部跟踪微调
+_PARAM_LABELS: Dict[str, str] = {
+    "classes": "检测类别",
+    "conf_thres": "置信度阈值",
+    "iou_thres": "NMS IoU 阈值",
+    "max_det": "最大检测数",
+    "input_size": "模型输入尺寸",
+    "enable_default_sort_tracking": "启用目标跟踪",
+    "tracking_algorithm": "跟踪算法",
+    "tracking_frame_rate": "跟踪帧率",
+    "tracking_max_age": "跟踪最大丢失帧",
+    "tracking_min_hits": "确认跟踪最小命中",
+    "tracking_iou_threshold": "跟踪 IoU 阈值",
+    "model_version": "模型版本",
+    "person_limit": "人数告警上限",
+    "enter_count": "计数初始值",
+    "gate_direction": "闸机方向",
+    "cross_confirm_frames": "过线确认帧数",
+    "corner_confirm_min": "过线角点确认数",
+    "track_lost_keep_frames": "丢失续轨迹最大帧数",
+    "cross_confirm_miss_tolerance": "过线确认容错帧",
+    "count_line": "过线计数线",
+    "bypass_line": "绕行线",
+    "boarding_count": "上车人数告警阈值",
+    "enable_helmet_filter": "安全帽区域过滤",
+    "helmet_min_ratio": "安全帽最小占比",
+    "roi_hold": "区域保持帧数",
+    "door_expand": "车门区域扩展比例",
+}
+
+_SKIP_PARAM_KEYS = {
+    "target_class_ids",
+    "track_high_thresh",
+    "track_low_thresh",
+    "track_buffer",
+    "match_thresh",
+    "new_track_thresh",
+    "tracking_history_frames",
+    "enable_track_history",
+    "enable_timing_log",
+    "mine_code",
+    "camera_code",
+}
+
+_LINE_PARAM_KEYS = {"count_line", "bypass_line"}
+
+
+def _format_param_value(key: str, value: Any) -> str:
+    if key in _LINE_PARAM_KEYS:
+        if not value:
+            return "未配置（在任务配置中绘制）"
+        return "已配置"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(x) for x in value) if value else "—"
+    if value is None or value == "":
+        return "—"
+    return str(value)
+
+
+def skill_param_items(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """从 DEFAULT_CONFIG.params 提取算法管理页展示的关键参数。"""
+    params = cfg.get("params") or {}
+    if not isinstance(params, dict):
+        return []
+    items: List[Dict[str, Any]] = []
+    for key, value in params.items():
+        if key in _SKIP_PARAM_KEYS:
+            continue
+        items.append(
+            {
+                "key": key,
+                "label": _PARAM_LABELS.get(key, key),
+                "value": _format_param_value(key, value),
+            }
+        )
+    return items
+
+
 def list_available_skills() -> List[Dict[str, Any]]:
     """返回可选择的技能列表（去重）"""
     seen = set()
@@ -41,11 +121,15 @@ def list_available_skills() -> List[Dict[str, Any]]:
             "skill_name": cfg.get("name"),
             "name_zh": cfg.get("name_zh"),
             "description": cfg.get("description"),
+            "type": cfg.get("type"),
+            "version": cfg.get("version"),
             "required_models": cfg.get("required_models", []),
             "cover_image": cfg.get("cover_image")
             or f"/skills/{cfg.get('name')}.png",
             # 任务配置表单按此声明渲染；未声明则不展示计数/画线等专用项
             "form_fields": cfg.get("form_fields") or [],
+            "params": skill_param_items(cfg),
+            "alert_definitions": cfg.get("alert_definitions") or [],
         })
     return result
 

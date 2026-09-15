@@ -62,6 +62,45 @@ def models(_: None = Depends(verify_worker_token)):
     return data
 
 
+@router.post("/models/{model_name}/load", summary="加载本机 Triton 模型")
+def load_model(
+    model_name: Annotated[str, Path()],
+    _: None = Depends(verify_worker_token),
+):
+    from app.services.mgmt_service import load_triton_model
+
+    try:
+        return load_triton_model(model_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Worker 加载模型失败 model=%s", model_name)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/models/{model_name}/unload", summary="卸载本机 Triton 模型")
+def unload_model(
+    model_name: Annotated[str, Path()],
+    unload_dependents: bool = Query(default=False),
+    _: None = Depends(verify_worker_token),
+):
+    from app.services.mgmt_service import unload_triton_model
+
+    try:
+        return unload_triton_model(
+            model_name, unload_dependents=unload_dependents
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Worker 卸载模型失败 model=%s", model_name)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/tasks/start", summary="启动推流任务")
 def start_task(
     payload: Dict[str, Any],

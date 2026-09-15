@@ -141,6 +141,37 @@ export const api = {
       workers?: any[];
       error?: string | null;
     }>("/api/v1/models"),
+  loadModel: (modelName: string, workerId?: string) => {
+    const q = new URLSearchParams();
+    if (workerId) q.set("worker_id", workerId);
+    const qs = q.toString();
+    return request<any>(
+      `/api/v1/models/${encodeURIComponent(modelName)}/load${qs ? `?${qs}` : ""}`,
+      { method: "POST" }
+    );
+  },
+  unloadModel: (
+    modelName: string,
+    opts?: { workerId?: string; unloadDependents?: boolean }
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.workerId) q.set("worker_id", opts.workerId);
+    if (opts?.unloadDependents) q.set("unload_dependents", "true");
+    const qs = q.toString();
+    return request<any>(
+      `/api/v1/models/${encodeURIComponent(modelName)}/unload${qs ? `?${qs}` : ""}`,
+      { method: "POST" }
+    );
+  },
+  deleteModel: (modelName: string, workerId?: string) => {
+    const q = new URLSearchParams();
+    if (workerId) q.set("worker_id", workerId);
+    const qs = q.toString();
+    return request<any>(
+      `/api/v1/models/${encodeURIComponent(modelName)}${qs ? `?${qs}` : ""}`,
+      { method: "DELETE" }
+    );
+  },
 
   getTasks: (opts?: { page?: number; pageSize?: number }) => {
     const q = new URLSearchParams();

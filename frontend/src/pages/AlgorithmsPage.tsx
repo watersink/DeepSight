@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "../api";
 import Pager from "../components/Pager";
 import coverCount from "../assets/skills/person_count_detector.png";
@@ -23,6 +23,170 @@ function coverOf(s: any): string {
     COVER_BY_SKILL[name] ||
     s?.cover_image ||
     `/skills/${name}.png`
+  );
+}
+
+function formatAlertCodes(codes: any): string {
+  if (!codes || typeof codes !== "object") return "";
+  return Object.entries(codes)
+    .map(([k, v]: [string, any]) => {
+      if (v && typeof v === "object") {
+        const code = v.code != null ? String(v.code) : "";
+        const desc = v.description ? String(v.description) : "";
+        return `${k}${code ? `=${code}` : ""}${desc ? ` ${desc}` : ""}`;
+      }
+      return `${k}=${String(v)}`;
+    })
+    .join("；");
+}
+
+function SkillDetailModal({
+  skill,
+  workers,
+  onClose,
+}: {
+  skill: any;
+  workers: ReactNode;
+  onClose: () => void;
+}) {
+  const params: any[] = skill?.params || [];
+  const formFields: any[] = skill?.form_fields || [];
+  const alerts: any[] = skill?.alert_definitions || [];
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="modal-panel skill-detail-panel"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skill-detail-title"
+      >
+        <div className="modal-head">
+          <div>
+            <h2 id="skill-detail-title">{skill.name_zh || skill.skill_name}</h2>
+            <p className="mono muted">{skill.skill_name}</p>
+          </div>
+          <button className="btn" type="button" onClick={onClose}>
+            关闭
+          </button>
+        </div>
+        <div className="modal-body skill-detail-body">
+          <div className="skill-detail-hero">
+            <img src={coverOf(skill)} alt="" />
+            <div>
+              <p className="skill-detail-desc">{skill.description || "暂无说明"}</p>
+              <div className="skill-detail-meta">
+                <span>类型：{skill.type || "—"}</span>
+                <span>版本：{skill.version || "—"}</span>
+                <span className="mono">
+                  模型：{(skill.required_models || []).join(", ") || "—"}
+                </span>
+              </div>
+              <div className="skill-tile-workers" style={{ marginTop: 8 }}>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  部署节点
+                </span>
+                {workers}
+              </div>
+            </div>
+          </div>
+
+          <section>
+            <h3>任务配置项</h3>
+            {formFields.length ? (
+              <table className="skill-kv-table">
+                <thead>
+                  <tr>
+                    <th>参数</th>
+                    <th>类型</th>
+                    <th>必填</th>
+                    <th>默认</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {formFields.map((f) => (
+                    <tr key={f.key}>
+                      <td>{f.label || f.key}</td>
+                      <td className="mono muted">{f.type || "—"}</td>
+                      <td>{f.required ? "是" : "否"}</td>
+                      <td className="mono">
+                        {f.default == null || f.default === ""
+                          ? "—"
+                          : String(f.default)}
+                      </td>
+                      <td className="muted">{f.hint || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted">该技能无任务级专用表单字段。</p>
+            )}
+          </section>
+
+          <section>
+            <h3>默认检测参数</h3>
+            {params.length ? (
+              <table className="skill-kv-table">
+                <thead>
+                  <tr>
+                    <th>参数</th>
+                    <th>键名</th>
+                    <th>默认值</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {params.map((p) => (
+                    <tr key={p.key}>
+                      <td>{p.label || p.key}</td>
+                      <td className="mono muted">{p.key}</td>
+                      <td className="mono">{p.value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted">无默认参数。</p>
+            )}
+          </section>
+
+          <section>
+            <h3>告警 / 识别类型</h3>
+            {alerts.length ? (
+              <table className="skill-kv-table">
+                <thead>
+                  <tr>
+                    <th>项</th>
+                    <th>级别</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {alerts.map((a, i) => (
+                    <tr key={a.key || i}>
+                      <td className="mono">{a.key || "—"}</td>
+                      <td>{a.level == null ? "—" : a.level}</td>
+                      <td>
+                        {a.description || "—"}
+                        {a.codes ? (
+                          <div className="muted" style={{ marginTop: 4 }}>
+                            {formatAlertCodes(a.codes)}
+                          </div>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted">无独立告警定义。</p>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -64,6 +228,7 @@ export default function AlgorithmsPage() {
   >({});
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
+  const [detail, setDetail] = useState<any | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
       const saved = localStorage.getItem("algorithms_view_mode");
@@ -224,6 +389,15 @@ export default function AlgorithmsPage() {
     }
   }, [viewMode]);
 
+  useEffect(() => {
+    if (!detail) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDetail(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [detail]);
+
   const paged = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
     return skills.slice(start, start + PAGE_SIZE);
@@ -273,7 +447,8 @@ export default function AlgorithmsPage() {
         <div>
           <h1>算法管理</h1>
           <p>
-            展示系统已注册的检测技能（只读）。识别参数在「任务配置 → 新增/编辑任务」中一并填写。
+            展示系统已注册的检测技能（只读）。点击技能可查看默认检测参数与告警说明。
+            任务级参数在「任务配置 → 新增/编辑任务」中填写。
             Worker 标签优先按该技能依赖的 Triton 模型所在机器展示（含 Triton 地址）。
           </p>
         </div>
@@ -324,7 +499,11 @@ export default function AlgorithmsPage() {
               </thead>
               <tbody>
                 {paged.map((s) => (
-                  <tr key={s.skill_name}>
+                  <tr
+                    key={s.skill_name}
+                    className="skill-list-row"
+                    onClick={() => setDetail(s)}
+                  >
                     <td>
                       <img
                         className="skill-list-thumb"
@@ -355,7 +534,19 @@ export default function AlgorithmsPage() {
           ) : (
             <div className="skill-tile-grid">
               {paged.map((s) => (
-                <article key={s.skill_name} className="skill-tile">
+                <article
+                  key={s.skill_name}
+                  className="skill-tile"
+                  onClick={() => setDetail(s)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setDetail(s);
+                    }
+                  }}
+                >
                   <div className="skill-tile-cover">
                     <img
                       src={coverOf(s)}
@@ -394,6 +585,14 @@ export default function AlgorithmsPage() {
           onChange={setPage}
         />
       </div>
+
+      {detail && (
+        <SkillDetailModal
+          skill={detail}
+          workers={renderWorkerTags(detail.skill_name)}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </div>
   );
 }

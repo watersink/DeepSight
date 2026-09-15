@@ -76,6 +76,99 @@ def list_models():
     return TritonModelListResponse(**data)
 
 
+@router.post("/models/{model_name}/load", summary="加载 Triton 模型")
+def load_model(
+    model_name: str,
+    worker_id: Optional[str] = Query(
+        None, description="目标 Worker；不传则对含该模型的节点全部加载"
+    ),
+):
+    """调用 Triton Repository Load API（需 model-control-mode=explicit）。"""
+    from app.services.runtime_gateway import WorkerApiError, runtime_gateway
+
+    try:
+        return runtime_gateway.control_model_aggregated(
+            model_name, "load", worker_id=worker_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except WorkerApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("加载模型失败 model=%s", model_name)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/models/{model_name}/unload", summary="卸载 Triton 模型")
+def unload_model(
+    model_name: str,
+    worker_id: Optional[str] = Query(
+        None, description="目标 Worker；不传则对含该模型的节点全部卸载"
+    ),
+    unload_dependents: bool = Query(
+        False,
+        description="是否同时卸载依赖模型（Triton unload_dependents）",
+    ),
+):
+    """调用 Triton Repository Unload API（需 model-control-mode=explicit）。"""
+    from app.services.runtime_gateway import WorkerApiError, runtime_gateway
+
+    try:
+        return runtime_gateway.control_model_aggregated(
+            model_name,
+            "unload",
+            worker_id=worker_id,
+            unload_dependents=unload_dependents,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except WorkerApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("卸载模型失败 model=%s", model_name)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.delete(
+    "/models/{model_name}",
+    summary="删除（卸载）Triton 模型",
+    description=(
+        "Triton 无独立删除文件接口；此处通过 Unload API 并开启 "
+        "unload_dependents，从服务中移除模型及其依赖。"
+    ),
+)
+def delete_model(
+    model_name: str,
+    worker_id: Optional[str] = Query(
+        None, description="目标 Worker；不传则对含该模型的节点全部卸载"
+    ),
+):
+    from app.services.runtime_gateway import WorkerApiError, runtime_gateway
+
+    try:
+        data = runtime_gateway.control_model_aggregated(
+            model_name,
+            "unload",
+            worker_id=worker_id,
+            unload_dependents=True,
+        )
+        data["action"] = "delete"
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except WorkerApiError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("删除(卸载)模型失败 model=%s", model_name)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get(
     "/zlm/snap",
     summary="ZLM 实时截图",

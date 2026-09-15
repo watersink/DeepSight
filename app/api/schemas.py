@@ -66,12 +66,33 @@ class SkillFormField(BaseModel):
     )
 
 
+class SkillParamItem(BaseModel):
+    """算法管理详情中展示的技能默认参数。"""
+
+    key: str = Field(description="参数键")
+    label: str = Field(description="中文显示名")
+    value: str = Field(description="默认值（已格式化）")
+
+
+class SkillAlertDefinition(BaseModel):
+    """技能告警/识别类型说明。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: Optional[str] = Field(default=None, description="告警键")
+    level: Optional[int] = Field(default=None, description="告警级别")
+    description: Optional[str] = Field(default=None, description="说明")
+    codes: Optional[Dict[str, Any]] = Field(default=None, description="识别类型码")
+
+
 class SkillInfoResponse(BaseModel):
     """已注册技能信息"""
 
     skill_name: str = Field(description="技能唯一标识，用于启动推流时指定")
     name_zh: Optional[str] = Field(default=None, description="技能中文名称")
     description: Optional[str] = Field(default=None, description="技能功能描述")
+    type: Optional[str] = Field(default=None, description="技能类型，如 detection")
+    version: Optional[str] = Field(default=None, description="技能版本")
     required_models: List[str] = Field(
         default_factory=list,
         description="依赖的 Triton 模型名称列表",
@@ -83,6 +104,14 @@ class SkillInfoResponse(BaseModel):
     form_fields: List[SkillFormField] = Field(
         default_factory=list,
         description="任务配置页应展示的参数字段（按技能差异化）",
+    )
+    params: List[SkillParamItem] = Field(
+        default_factory=list,
+        description="技能 DEFAULT_CONFIG.params 中的关键默认参数",
+    )
+    alert_definitions: List[SkillAlertDefinition] = Field(
+        default_factory=list,
+        description="告警 / 识别类型定义",
     )
 
 

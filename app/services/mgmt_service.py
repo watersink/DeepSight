@@ -1316,16 +1316,20 @@ def list_triton_models() -> Dict[str, Any]:
         version = m.get("version")
         version_str = "" if version is None else str(version)
         state = m.get("state")
+        state_u = str(state or "").upper()
         ready = False
         try:
             ready = bool(triton_client.is_model_ready(name, version_str))
         except Exception:
-            ready = str(state or "").upper() == "READY"
+            ready = state_u == "READY"
+        # 仓库索引明确 UNAVAILABLE 时以离线为准（卸载后常见）
+        if state_u == "UNAVAILABLE":
+            ready = False
         items.append(
             {
                 "name": name,
                 "version": version_str or None,
-                "state": str(state) if state is not None else ("READY" if ready else None),
+                "state": str(state) if state is not None else ("READY" if ready else "UNAVAILABLE"),
                 "ready": ready,
             }
         )
@@ -1333,3 +1337,31 @@ def list_triton_models() -> Dict[str, Any]:
     items.sort(key=lambda x: (x["name"], x.get("version") or ""))
     result["items"] = items
     return result
+
+
+def load_triton_model(model_name: str) -> Dict[str, Any]:
+    """通过 Triton Repository Load API 加载模型。"""
+    from app.services.triton_client import triton_client
+
+    name = (model_name or "").strip()
+    if not name:
+        raise ValueError("model_name 不能为空")
+    data = triton_client.load_model_ex(name)
+    data["server_url"] = settings.TRITON_URL
+    return data
+
+
+def unload_triton_model(
+    model_name: str,
+    *,
+    unload_dependents: bool = False,
+) -> Dict[str, Any]:
+    """通过 Triton Repository Unload API 卸载模型。"""
+    from app.services.triton_client import triton_client
+
+    name = (model_name or "").strip()
+    if not name:
+        raise ValueError("model_name 不能为空")
+    data = triton_client.unload_model_ex(name, unload_dependents=unload_dependents)
+    data["server_url"] = settings.TRITON_URL
+    return data

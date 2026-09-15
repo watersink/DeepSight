@@ -487,7 +487,14 @@ select option {
   overflow: hidden;
   background: #121916;
   min-height: 0;
+  cursor: pointer;
   transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.skill-list-row {
+  cursor: pointer;
+}
+.skill-list-row:hover {
+  background: rgba(61, 155, 110, 0.08);
 }
 .skill-tile:hover {
   border-color: rgba(61, 155, 110, 0.45);
@@ -565,6 +572,72 @@ select option {
 }
 .badge.worker-tag {
   font-weight: 500;
+}
+
+.skill-detail-panel {
+  width: min(820px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+}
+.skill-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.skill-detail-body h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.skill-detail-hero {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.skill-detail-hero img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0a100e;
+}
+.skill-detail-desc {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--text);
+}
+.skill-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.skill-kv-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.skill-kv-table th,
+.skill-kv-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.skill-kv-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .skill-detail-hero {
+    grid-template-columns: 1fr;
+  }
 }
 
 .page-head {

@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -273,6 +274,155 @@ class RuntimeGateway:
         body["worker_name"] = node.name
         return body
 
+    def load_model(
+        self,
+        model_name: str,
+        worker_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """在指定 Worker 的 Triton 上加载模型。"""
+        node = get_worker_node(worker_id)
+        if node.is_local:
+            from app.services.mgmt_service import load_triton_model
+
+            data = load_triton_model(model_name)
+            data["worker_id"] = node.id
+            data["worker_name"] = node.name
+            return data
+        body = self._remote(
+            node,
+            "POST",
+            f"/internal/v1/models/{quote(model_name, safe='')}/load",
+        )
+        if not isinstance(body, dict):
+            body = {"ok": True, "model_name": model_name}
+        body["worker_id"] = node.id
+        body["worker_name"] = node.name
+        return body
+
+    def unload_model(
+        self,
+        model_name: str,
+        worker_id: Optional[str] = None,
+        *,
+        unload_dependents: bool = False,
+    ) -> Dict[str, Any]:
+        """在指定 Worker 的 Triton 上卸载模型。"""
+        node = get_worker_node(worker_id)
+        if node.is_local:
+            from app.services.mgmt_service import unload_triton_model
+
+            data = unload_triton_model(
+                model_name, unload_dependents=unload_dependents
+            )
+            data["worker_id"] = node.id
+            data["worker_name"] = node.name
+            return data
+        body = self._remote(
+            node,
+            "POST",
+            f"/internal/v1/models/{quote(model_name, safe='')}/unload",
+            params={"unload_dependents": str(unload_dependents).lower()},
+        )
+        if not isinstance(body, dict):
+            body = {
+                "ok": True,
+                "model_name": model_name,
+                "unload_dependents": unload_dependents,
+            }
+        body["worker_id"] = node.id
+        body["worker_name"] = node.name
+        return body
+
+    def control_model_aggregated(
+        self,
+        model_name: str,
+        action: str,
+        *,
+        worker_id: Optional[str] = None,
+        unload_dependents: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        对模型执行 load/unload。
+
+        worker_id 为空时，对所有在线且仓库中含该模型的 Worker 执行。
+        """
+        name = (model_name or "").strip()
+        if not name:
+            raise ValueError("model_name 不能为空")
+        action = (action or "").strip().lower()
+        if action not in {"load", "unload"}:
+            raise ValueError("action 仅支持 load / unload")
+
+        targets: List[WorkerNode]
+        if worker_id:
+            targets = [get_worker_node(worker_id)]
+        else:
+            targets = []
+            for node in list_worker_nodes():
+                try:
+                    raw = self.list_models(node.id)
+                except WorkerApiError:
+                    continue
+                if raw.get("error"):
+                    continue
+                names = {
+                    str(m.get("name") or "").strip()
+                    for m in (raw.get("items") or [])
+                    if isinstance(m, dict)
+                }
+                if name in names:
+                    targets.append(node)
+            if not targets:
+                raise ValueError(
+                    f"未在任何在线 Worker 的 Triton 仓库中找到模型: {name}"
+                )
+
+        results: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        for node in targets:
+            try:
+                if action == "load":
+                    results.append(self.load_model(name, node.id))
+                else:
+                    results.append(
+                        self.unload_model(
+                            name,
+                            node.id,
+                            unload_dependents=unload_dependents,
+                        )
+                    )
+            except WorkerApiError as exc:
+                errors.append(f"{node.id}: {exc}")
+            except Exception as exc:
+                errors.append(f"{node.id}: {exc}")
+
+        # 校验操作是否真正改变了就绪状态
+        for item in results:
+            still_ready = bool(item.get("ready"))
+            wid = item.get("worker_id") or "?"
+            if action == "unload" and still_ready:
+                errors.append(
+                    f"{wid}: 卸载请求已发送，但模型仍处于就绪（请确认 "
+                    f"--model-control-mode=explicit）"
+                )
+            if action == "load" and not still_ready:
+                errors.append(f"{wid}: 加载请求已发送，但模型尚未就绪")
+
+        if errors and not results:
+            raise WorkerApiError("; ".join(errors), status_code=502)
+        if errors and action == "unload":
+            # 卸载未生效时视为失败，避免前端误显示成功
+            raise WorkerApiError("; ".join(errors), status_code=502)
+
+        return {
+            "ok": not errors,
+            "action": action,
+            "model_name": name,
+            "unload_dependents": unload_dependents if action == "unload" else False,
+            "results": results,
+            "errors": errors or None,
+        }
+
     def list_models_aggregated(self) -> Dict[str, Any]:
         """汇总所有 Worker 上的 Triton 模型，按模型名合并部署节点。"""
         nodes = list_worker_nodes()
@@ -317,33 +467,65 @@ class RuntimeGateway:
                 if not name:
                     continue
                 entry = by_name.get(name)
+                ready_now = bool(m.get("ready"))
+                state_now = m.get("state")
                 if not entry:
                     entry = {
                         "name": name,
                         "version": m.get("version"),
-                        "state": m.get("state"),
-                        "ready": bool(m.get("ready")),
+                        "state": state_now,
+                        "ready": ready_now,
                         "workers": [],
                     }
                     by_name[name] = entry
                 else:
-                    if m.get("ready"):
+                    # 任一 Worker/版本就绪则整体就绪；全部离线时同步为离线
+                    if ready_now:
                         entry["ready"] = True
-                    if m.get("version") and not entry.get("version"):
+                    elif not entry.get("workers"):
+                        entry["ready"] = False
+                    if state_now:
+                        # 优先保留 READY；否则用最新状态覆盖
+                        if ready_now or str(entry.get("state") or "").upper() != "READY":
+                            entry["state"] = state_now
+                    if m.get("version") and (
+                        not entry.get("version") or ready_now
+                    ):
                         entry["version"] = m.get("version")
-                    if m.get("state") and not entry.get("state"):
-                        entry["state"] = m.get("state")
 
                 wtag = {
                     "worker_id": node.id,
                     "worker_name": node.name,
                     "triton_url": raw.get("server_url"),
-                    "ready": bool(m.get("ready")),
+                    "ready": ready_now,
                     "version": m.get("version"),
-                    "state": m.get("state"),
+                    "state": state_now,
                 }
-                if not any(x.get("worker_id") == node.id for x in entry["workers"]):
+                existing_w = next(
+                    (
+                        x
+                        for x in entry["workers"]
+                        if x.get("worker_id") == node.id
+                    ),
+                    None,
+                )
+                if existing_w is None:
                     entry["workers"].append(wtag)
+                else:
+                    # 同 Worker 多版本：任一版本就绪则该节点就绪
+                    existing_w["ready"] = bool(existing_w.get("ready")) or ready_now
+                    if state_now:
+                        existing_w["state"] = state_now
+                    if m.get("version"):
+                        existing_w["version"] = m.get("version")
+
+                # 按各 Worker 汇总重算整体 ready
+                entry["ready"] = any(
+                    bool(w.get("ready")) for w in entry["workers"]
+                )
+                if not entry["ready"] and entry.get("state"):
+                    if str(entry["state"]).upper() == "READY":
+                        entry["state"] = "UNAVAILABLE"
 
         items = sorted(by_name.values(), key=lambda x: x["name"])
         any_live = any(bool(w.get("online")) for w in workers_meta)

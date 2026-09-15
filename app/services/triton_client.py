@@ -262,21 +262,35 @@ class TritonClient:
         返回:
             bool: 模型是否成功加载
         """
+        self.load_model_ex(model_name, config=config, files=files)
+        return True
+
+    def load_model_ex(
+        self,
+        model_name: str,
+        config: Optional[str] = None,
+        files: Optional[Dict[str, bytes]] = None,
+    ) -> Dict[str, Any]:
+        """调用 Triton Repository Load API，失败时抛出 RuntimeError。"""
         try:
             self.client.load_model(model_name, config=config, files=files)
             logger.info(f"模型 {model_name} 加载请求已发送")
-            
-            # 验证模型是否成功加载
-            if self.is_model_ready(model_name):
+            ready = bool(self.is_model_ready(model_name))
+            self.clear_metadata_cache(model_name)
+            if ready:
                 logger.info(f"模型 {model_name} 已成功加载并就绪")
-                self.clear_metadata_cache(model_name)
-                return True
             else:
                 logger.warning(f"模型 {model_name} 加载请求已发送，但模型尚未就绪")
-                return False
+            return {
+                "ok": True,
+                "action": "load",
+                "model_name": model_name,
+                "ready": ready,
+                "server_url": self.url,
+            }
         except grpcclient.InferenceServerException as e:
             logger.error(f"加载模型 {model_name} 失败: {e}")
-            return False
+            raise RuntimeError(f"Triton 加载模型失败: {e}") from e
     
     def unload_model(self, model_name: str, unload_dependents: bool = False) -> bool:
         """
@@ -289,21 +303,47 @@ class TritonClient:
         返回:
             bool: 模型是否成功卸载
         """
+        self.unload_model_ex(model_name, unload_dependents=unload_dependents)
+        return True
+
+    def unload_model_ex(
+        self,
+        model_name: str,
+        unload_dependents: bool = False,
+    ) -> Dict[str, Any]:
+        """调用 Triton Repository Unload API，失败时抛出 RuntimeError。"""
         try:
             self.client.unload_model(model_name, unload_dependents=unload_dependents)
-            logger.info(f"模型 {model_name} 卸载请求已发送")
-            
-            # 验证模型是否成功卸载
-            if not self.is_model_ready(model_name):
+            logger.info(
+                f"模型 {model_name} 卸载请求已发送 unload_dependents={unload_dependents}"
+            )
+            self.clear_metadata_cache(model_name)
+            # 卸载后短暂轮询，避免瞬时状态未刷新
+            ready = True
+            for _ in range(8):
+                ready = bool(self.is_model_ready(model_name))
+                if not ready:
+                    break
+                time.sleep(0.15)
+            if not ready:
                 logger.info(f"模型 {model_name} 已成功卸载")
-                self.clear_metadata_cache(model_name)
-                return True
             else:
                 logger.warning(f"模型 {model_name} 卸载请求已发送，但模型仍然就绪")
-                return False
+                raise RuntimeError(
+                    f"Triton 卸载后模型仍就绪: {model_name} "
+                    f"（请确认 --model-control-mode=explicit）"
+                )
+            return {
+                "ok": True,
+                "action": "unload",
+                "model_name": model_name,
+                "unload_dependents": unload_dependents,
+                "ready": False,
+                "server_url": self.url,
+            }
         except grpcclient.InferenceServerException as e:
             logger.error(f"卸载模型 {model_name} 失败: {e}")
-            return False
+            raise RuntimeError(f"Triton 卸载模型失败: {e}") from e
     
     def infer(self, model_name: str, inputs: Dict[str, np.ndarray], 
               model_version: str = "", request_id: str = "", 
