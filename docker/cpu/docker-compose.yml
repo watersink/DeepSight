@@ -1,0 +1,175 @@
+# DeepSight CPU 机一键部署
+# 用法:
+#   cp .env.example .env
+#   # 只改 .env 里的 PUBLIC_HOST / GPU_HOST（及密码）即可
+#   docker compose up -d --build
+#
+# 服务: mysql redis rabbitmq minio zlm api
+# IP 等主机地址只在 .env 配置，本文件不写死局域网 IP
+
+name: deepsight-cpu
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-deepsight}
+      MYSQL_DATABASE: ${MYSQL_DB:-yingjiting}
+      MYSQL_USER: ${MYSQL_USER:-deepsight}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-deepsight}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - ./volumes/mysql/data:/var/lib/mysql
+    ports:
+      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_PASSWORD:-deepsight}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./volumes/redis/data:/data
+    ports:
+      - "${REDIS_PUBLISH_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_DEFAULT_VHOST: "${RABBITMQ_VHOST:-/}"
+    volumes:
+      - ./volumes/rabbitmq/data:/var/lib/rabbitmq
+    ports:
+      - "${RABBITMQ_PUBLISH_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - ./volumes/minio/data:/data
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  zlm:
+    image: zlmediakit/zlmediakit:master
+    restart: unless-stopped
+    volumes:
+      - ./conf/zlm/config.ini:/opt/media/conf/config.ini:ro
+      - ./volumes/zlm/www:/opt/media/www
+    ports:
+      - "${ZLM_RTMP_PUBLISH_PORT:-1935}:1935"
+      - "${ZLM_HTTP_PUBLISH_PORT:-8080}:80"
+      - "${ZLM_RTSP_PUBLISH_PORT:-8554}:554"
+      - "10000:10000"
+      - "10000:10000/udp"
+      - "8000:8000/udp"
+      # 不映射 9000/udp(SRT)，避免与 MinIO API :9000 冲突
+      # - "9000:9000/udp"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.api
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.aliyun.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-mirrors.aliyun.com}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: deepsight-api:local
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      zlm:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      REST_HOST: 0.0.0.0
+      REST_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      FRONTEND_DIST_DIR: frontend/dist
+
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: ${MYSQL_USER:-deepsight}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-deepsight}
+      MYSQL_DB: ${MYSQL_DB:-yingjiting}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: ${REDIS_DB:-1}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_ENABLED: ${REDIS_ENABLED:-true}
+
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+
+      MINIO_ENDPOINT: minio:9000
+      MINIO_CONSOLE_URL: http://${PUBLIC_HOST}:${MINIO_CONSOLE_PORT:-9001}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-yingjiting}
+      MINIO_SECURE: "false"
+      MINIO_PUBLIC_READ: "true"
+      MINIO_PUBLIC_BASE_URL: http://${PUBLIC_HOST}:${MINIO_API_PORT:-9000}
+
+      # 对内访问 ZLM 用服务名；对外播流/推流 URL 用 PUBLIC_HOST（来自 .env）
+      ZLM_HOST: zlm
+      ZLM_HTTP_PORT: 80
+      ZLM_RTMP_PORT: 1935
+      ZLM_RTSP_PORT: 554
+      ZLM_PUBLIC_HOST: ${PUBLIC_HOST}
+      ZLM_PUBLIC_HTTP_PORT: ${ZLM_HTTP_PUBLISH_PORT:-8080}
+      ZLM_PUBLIC_RTMP_PORT: ${ZLM_RTMP_PUBLISH_PORT:-1935}
+      ZLM_PUBLIC_RTSP_PORT: ${ZLM_RTSP_PUBLISH_PORT:-8554}
+      ZLM_SECRET: ${ZLM_SECRET:-b1CXeSHhB1AcYV5Hmf9e9h7nyHXsI9Tm}
+
+      # 默认按 GPU_HOST 拼 Worker；多卡时可在 .env 覆盖整行 WORKER_NODES
+      WORKER_NODES: ${WORKER_NODES:-gpu1|GPU-1|http://${GPU_HOST}:${WORKER_PUBLISH_PORT:-8100}}
+      DEFAULT_WORKER_ID: ${DEFAULT_WORKER_ID:-gpu1}
+      WORKER_TOKEN: ${WORKER_TOKEN:-change-me}
+      TRITON_URL: ${TRITON_URL:-${GPU_HOST}:${TRITON_GRPC_PORT:-8201}}
+    ports:
+      - "${API_PUBLISH_PORT:-8000}:8000"

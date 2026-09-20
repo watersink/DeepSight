@@ -1,0 +1,13 @@
+# 本地环境（含密钥）
+**/.env
+!**/.env.example
+
+# volumes 下除 .gitkeep 外一律不入库
+**/volumes/**
+!**/volumes/**/
+!**/volumes/**/.gitkeep
+
+# 证书 / 临时
+**/*.pem
+**/*.key
+.env.backup*

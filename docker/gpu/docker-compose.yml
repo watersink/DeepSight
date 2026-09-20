@@ -1,0 +1,109 @@
+# DeepSight GPU 机一键部署
+# 用法:
+#   cp .env.example .env
+#   # 只改 .env 里的 CPU_HOST / WORKER_TOKEN / 模型路径
+#   docker compose up -d --build
+#
+# 前置: 已安装 NVIDIA Driver + nvidia-container-toolkit
+# 服务: triton worker
+# 主机 IP 只在 .env 配置，本文件不写死局域网 IP
+
+name: deepsight-gpu
+
+services:
+  triton:
+    image: ${TRITON_IMAGE:-nvcr.io/nvidia/tritonserver:24.06-py3}
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-0}
+    volumes:
+      - ${TRITON_MODELS_HOST_PATH:-./volumes/triton/models}:/models
+    ports:
+      - "${TRITON_HTTP_PORT:-8200}:8000"
+      - "${TRITON_GRPC_PORT:-8201}:8001"
+      - "${TRITON_METRICS_PORT:-8202}:8002"
+    command:
+      - tritonserver
+      - --model-repository=/models
+      - --model-control-mode=explicit
+      - --load-model=*
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/v2/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${NVIDIA_DEVICE_COUNT:-1}
+              capabilities: [gpu]
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile.worker
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.aliyun.com}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-mirrors.aliyun.com}
+    image: deepsight-worker:local
+    restart: unless-stopped
+    depends_on:
+      triton:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WORKER_HOST: 0.0.0.0
+      WORKER_PORT: 8100
+      WORKER_TOKEN: ${WORKER_TOKEN:-change-me}
+      WORKER_NODES: local|本机|local
+      DEFAULT_WORKER_ID: local
+
+      TRITON_URL: triton:8001
+
+      # 以下主机均来自 .env 的 CPU_HOST
+      ZLM_HOST: ${CPU_HOST}
+      ZLM_HTTP_PORT: ${ZLM_HTTP_PORT:-8080}
+      ZLM_RTMP_PORT: ${ZLM_RTMP_PORT:-1935}
+      ZLM_RTSP_PORT: ${ZLM_RTSP_PORT:-8554}
+      ZLM_SECRET: ${ZLM_SECRET:-b1CXeSHhB1AcYV5Hmf9e9h7nyHXsI9Tm}
+
+      MINIO_ENDPOINT: ${CPU_HOST}:${MINIO_API_PORT:-9000}
+      MINIO_CONSOLE_URL: http://${CPU_HOST}:${MINIO_CONSOLE_PORT:-9001}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-yingjiting}
+      MINIO_SECURE: "false"
+      MINIO_PUBLIC_READ: "true"
+      MINIO_PUBLIC_BASE_URL: http://${CPU_HOST}:${MINIO_API_PORT:-9000}
+
+      RABBITMQ_HOST: ${CPU_HOST}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME:-admin}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-admin123}
+      RABBITMQ_VHOST: ${RABBITMQ_VHOST:-/}
+
+      MYSQL_HOST: ${CPU_HOST}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-deepsight}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-deepsight}
+      MYSQL_DB: ${MYSQL_DB:-yingjiting}
+
+      REDIS_HOST: ${CPU_HOST}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_DB: ${REDIS_DB:-1}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_ENABLED: ${REDIS_ENABLED:-true}
+
+      STREAM_USE_HARDWARE_ENCODING: ${STREAM_USE_HARDWARE_ENCODING:-true}
+      STREAM_USE_HARDWARE_DECODING: ${STREAM_USE_HARDWARE_DECODING:-true}
+    ports:
+      - "${WORKER_PUBLISH_PORT:-8100}:8100"
+    # 若 Worker 也要用 GPU 解码/编码，取消下面注释并安装 nvidia-container-toolkit
+    # runtime: nvidia

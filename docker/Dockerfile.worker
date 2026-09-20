@@ -1,0 +1,58 @@
+# DeepSight Worker（GPU 机：解码 / 推理调用 / FFmpeg 推流）
+# build context: 仓库根目录
+#
+# 国内网络默认走阿里云 Debian / PyPI 镜像；可覆盖：
+#   docker compose build --build-arg DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+FROM python:3.11-slim-bookworm
+
+ARG DEBIAN_MIRROR=https://mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG PIP_TRUSTED_HOST=mirrors.aliyun.com
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
+
+# 替换官方源，避免 deb.debian.org / fastly 在国内 Connection refused
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i \
+        -e "s|https\?://deb.debian.org/debian|${DEBIAN_MIRROR}/debian|g" \
+        -e "s|https\?://security.debian.org/debian-security|${DEBIAN_MIRROR}/debian-security|g" \
+        /etc/apt/sources.list.d/debian.sources; \
+    else \
+      printf '%s\n' \
+        "deb ${DEBIAN_MIRROR}/debian bookworm main contrib non-free non-free-firmware" \
+        "deb ${DEBIAN_MIRROR}/debian bookworm-updates main contrib non-free non-free-firmware" \
+        "deb ${DEBIAN_MIRROR}/debian-security bookworm-security main contrib non-free non-free-firmware" \
+        > /etc/apt/sources.list; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        curl \
+        ca-certificates \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        libxcb1 \
+        libx11-6 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --upgrade pip && pip install -r requirements.txt
+
+COPY app ./app
+
+EXPOSE 8100
+CMD ["uvicorn", "app.worker_main:app", "--host", "0.0.0.0", "--port", "8100"]

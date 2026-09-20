@@ -54,10 +54,26 @@ class Settings(BaseSettings):
     )
 
     # ZLMediaKit 流媒体引擎
-    ZLM_HOST: str = Field(default="10.1.3.21", description="ZLMediaKit 主机地址")
-    ZLM_RTMP_PORT: int = Field(default=1935, description="ZLMediaKit RTMP 端口")
-    ZLM_RTSP_PORT: int = Field(default=8554, description="ZLMediaKit RTSP 端口")
-    ZLM_HTTP_PORT: int = Field(default=8080, description="ZLMediaKit HTTP 端口")
+    ZLM_HOST: str = Field(default="10.1.3.21", description="ZLMediaKit 主机地址（容器内可写服务名）")
+    ZLM_RTMP_PORT: int = Field(default=1935, description="ZLMediaKit RTMP 端口（对内连接）")
+    ZLM_RTSP_PORT: int = Field(default=8554, description="ZLMediaKit RTSP 端口（对内连接）")
+    ZLM_HTTP_PORT: int = Field(default=8080, description="ZLMediaKit HTTP 端口（对内连接，compose 内多为 80）")
+    ZLM_PUBLIC_HOST: Optional[str] = Field(
+        default=None,
+        description="对外播流/推流主机名或 IP；省略则与 ZLM_HOST 相同",
+    )
+    ZLM_PUBLIC_HTTP_PORT: Optional[int] = Field(
+        default=None,
+        description="对外 HTTP 端口；省略则与 ZLM_HTTP_PORT 相同",
+    )
+    ZLM_PUBLIC_RTMP_PORT: Optional[int] = Field(
+        default=None,
+        description="对外 RTMP 端口；省略则与 ZLM_RTMP_PORT 相同",
+    )
+    ZLM_PUBLIC_RTSP_PORT: Optional[int] = Field(
+        default=None,
+        description="对外 RTSP 端口；省略则与 ZLM_RTSP_PORT 相同",
+    )
     ZLM_SECRET: str = Field(
         default="b1CXeSHhB1AcYV5Hmf9e9h7nyHXsI9Tm",
         description="ZLMediaKit HTTP API 密钥（config.ini [api] secret）",
@@ -319,7 +335,29 @@ class Settings(BaseSettings):
         return _CODE_ROOT / raw
 
     @property
+    def zlm_public_host(self) -> str:
+        return (self.ZLM_PUBLIC_HOST or self.ZLM_HOST or "").strip()
+
+    @property
+    def zlm_public_http_port(self) -> int:
+        return int(self.ZLM_PUBLIC_HTTP_PORT or self.ZLM_HTTP_PORT)
+
+    @property
+    def zlm_public_rtmp_port(self) -> int:
+        return int(self.ZLM_PUBLIC_RTMP_PORT or self.ZLM_RTMP_PORT)
+
+    @property
+    def zlm_public_rtsp_port(self) -> int:
+        return int(self.ZLM_PUBLIC_RTSP_PORT or self.ZLM_RTSP_PORT)
+
+    @property
     def zlm_http_base_url(self) -> str:
+        """浏览器可访问的 ZLM HTTP 根地址。"""
+        return f"http://{self.zlm_public_host}:{self.zlm_public_http_port}"
+
+    @property
+    def zlm_api_base_url(self) -> str:
+        """服务进程访问 ZLM HTTP API 的根地址（可用容器服务名）。"""
         return f"http://{self.ZLM_HOST}:{self.ZLM_HTTP_PORT}"
 
     @property
@@ -360,9 +398,10 @@ class Settings(BaseSettings):
         return self.build_flv_play_url(parts[0], parts[1])
 
     def _push_scheme_host(self, output_format: str) -> str:
+        host = self.zlm_public_host
         if output_format == "rtsp":
-            return f"rtsp://{self.ZLM_HOST}:{self.ZLM_RTSP_PORT}"
-        return f"rtmp://{self.ZLM_HOST}:{self.ZLM_RTMP_PORT}"
+            return f"rtsp://{host}:{self.zlm_public_rtsp_port}"
+        return f"rtmp://{host}:{self.zlm_public_rtmp_port}"
 
     def build_zlm_pull_url(
         self,

@@ -4,6 +4,15 @@ __pycache__/
 
 # 前端构建产物
 dist/
+frontend/dist/
+
+# Docker 本地环境与卷数据
+docker/**/.env
+# volumes 下除 .gitkeep 外一律不入库（含 mysql/redis/minio/zlm/triton 等）
+docker/**/volumes/**
+!docker/**/volumes/**/
+!docker/**/volumes/**/.gitkeep
+
 
 # 保留 static 目录结构；uploads 下运行时文件不入库
 static/uploads/**

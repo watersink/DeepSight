@@ -13,6 +13,7 @@
 - **ZLMediaKit 流媒体**：推流目标为 ZLMediaKit，支持 RTMP / RTSP 及 HTTP-FLV、HLS 等播放
 - **多协议推流**：经 FFmpeg 向 ZLMediaKit 推流，由流媒体服务分发；任务响应返回 `out_url` 与对应 `flv_url`
 - **远程 Worker**：支持 API/前端与编解码+Triton 分机部署；任务可绑定指定 Worker
+- **Docker 分机一键部署**：见 [`docker/`](./docker/)（CPU 机中间件+API，GPU 机 Triton+Worker）
 - **硬件编码**：可选 NVENC（`h264_nvenc`），失败时回退软件编码
 - **Swagger 文档**：内置 `/docs` 交互式 API 文档
 - **自动化测试**：`app/auto_unit_test/run_tests.py` 一键执行技能、服务端、客户端、本地推流测试
@@ -67,6 +68,8 @@ DEFAULT_WORKER_ID=local
 ```
 
 管理台「任务配置」可选择摄像头、Worker 与该 Worker 下的算法技能。
+
+生产/联调推荐使用 Compose 分机部署，详见 **[docker/README.md](./docker/README.md)**。
 
 ## 目录结构
 
