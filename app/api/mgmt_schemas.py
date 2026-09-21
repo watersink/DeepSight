@@ -291,6 +291,7 @@ class AlertOut(BaseModel):
     image_url: Optional[str] = None
     video_url: Optional[str] = None
     category: str = "alert"
+    alarm_level: Optional[int] = None
     payload: Optional[Dict[str, Any]] = None
     status: str
     created_at: datetime

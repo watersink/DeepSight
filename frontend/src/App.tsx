@@ -13,6 +13,7 @@ import EventsPage from "./pages/EventsPage";
 import UsersPage from "./pages/UsersPage";
 import PartnersPage from "./pages/PartnersPage";
 import PlatformSettingsPage from "./pages/PlatformSettingsPage";
+import AlertLevelsPage from "./pages/AlertLevelsPage";
 import LoginPage from "./pages/LoginPage";
 
 type NavLeaf = { to: string; label: string; end?: boolean; adminOnly?: boolean };
@@ -36,6 +37,7 @@ const navItems: NavEntry[] = [
     adminOnly: true,
     children: [
       { to: "/system/basic", label: "基础配置", adminOnly: true },
+      { to: "/system/alert-levels", label: "报警等级管理", adminOnly: true },
       { to: "/system/partners", label: "第三方接入配置", adminOnly: true },
       { to: "/users", label: "用户管理", adminOnly: true },
     ],
@@ -150,6 +152,14 @@ function AppShell() {
             element={
               <RequireAdmin>
                 <PlatformSettingsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/system/alert-levels"
+            element={
+              <RequireAdmin>
+                <AlertLevelsPage />
               </RequireAdmin>
             }
           />

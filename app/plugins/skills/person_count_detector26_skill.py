@@ -159,7 +159,7 @@ class PersonCountDetector26Skill(BaseSkill):
         "alert_definitions": [
             {
                 "key": "enter_count",
-                "level": 0,
+                "level": 3,
                 "description": "人员经闸机线进入 enter_point 一侧，人数增加。",
                 # 识别类型：按 gate_direction 区分入/出
                 "codes": {
@@ -169,7 +169,7 @@ class PersonCountDetector26Skill(BaseSkill):
             },
             {
                 "key": "count_exit",
-                "level": 1,
+                "level": 2,
                 "description": "人员经闸机线从进入侧翻越到对侧。",
                 # 识别类型：入井闸机反向出闸 / 出井闸机反向入闸
                 "codes": {

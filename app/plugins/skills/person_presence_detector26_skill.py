@@ -73,7 +73,13 @@ class PersonPresenceDetector26Skill(BaseSkill):
             "model_version": "1",
             "enable_timing_log": False,
         },
-        "alert_definitions": [],
+        "alert_definitions": [
+            {
+                "key": "presence_count",
+                "level": 3,
+                "description": "画面人数统计",
+            },
+        ],
     }
 
     def _initialize(self) -> None:
@@ -95,6 +101,9 @@ class PersonPresenceDetector26Skill(BaseSkill):
 
         self.enable_default_sort_tracking = params.get("enable_default_sort_tracking", True)
         self.tracking_algorithm = params.get("tracking_algorithm", "bytetrack")
+        self.alert_definitions: List[Dict[str, Any]] = list(
+            self.config.get("alert_definitions") or []
+        )
         # 上一帧已打印的人数，用于人数变化时打日志，避免每帧刷屏
         self._last_logged_person_count: Optional[int] = None
 
@@ -388,12 +397,26 @@ class PersonPresenceDetector26Skill(BaseSkill):
                     self.log("info", "当前画面无人")
                 self._last_logged_person_count = count
 
+            alert_def = self._get_alert_definition("presence_count")
+            active_alerts: List[Dict[str, Any]] = []
+            if has_person_count_change:
+                active_alerts.append(
+                    {
+                        "key": alert_def["key"],
+                        "level": alert_def["level"],
+                        "description": alert_def["description"],
+                        "count": count,
+                    }
+                )
+
             result_data = {
                 "detections": detections,
                 "count": count,
                 "skill_name": self.config.get("name") or "person_presence_detector26",
                 "has_person_count_change": has_person_count_change,
                 "recognition_types": [],
+                "alert_definitions": list(self.alert_definitions),
+                "active_alerts": active_alerts,
                 "flow_metrics": {
                     "current_person_count": count,
                 },
@@ -405,6 +428,19 @@ class PersonPresenceDetector26Skill(BaseSkill):
         except Exception as e:
             logger.exception(f"画面人数检测技能处理失败: {str(e)}")
             return SkillResult.error_result(f"处理失败: {str(e)}")
+
+    def _get_alert_definition(self, alert_key: str) -> Dict[str, Any]:
+        """按 key 取告警定义。画面人数只有 presence_count 一条。"""
+        item: Dict[str, Any] = {}
+        for definition in self.alert_definitions:
+            if isinstance(definition, dict) and str(definition.get("key") or "") == alert_key:
+                item = definition
+                break
+        return {
+            "key": alert_key,
+            "level": int(item.get("level", 3) or 3),
+            "description": str(item.get("description") or "").strip(),
+        }
 
     def _draw_detections_on_frame(self, frame: np.ndarray, alert_data: Dict) -> np.ndarray:
         """在帧上绘制检测框、跟踪轨迹与当前人数。"""

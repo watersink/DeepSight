@@ -765,6 +765,7 @@ def test_partner_webhook(
         image_url=None,
         video_url=None,
         category="alert",
+        alarm_level=2,
         payload={"test": True},
         status="new",
         created_at=datetime.now(),

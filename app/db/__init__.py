@@ -89,6 +89,7 @@ def init_db() -> None:
     from app.db import session_scope
     from app.services.auth_service import seed_default_admin
     from app.services.platform_settings_service import ensure_platform_settings
+    from app.services.alert_level_service import ensure_alert_levels
 
     ensure_mysql_database()
     Base.metadata.create_all(bind=engine)
@@ -102,6 +103,7 @@ def init_db() -> None:
     try:
         with session_scope() as db:
             ensure_platform_settings(db)
+            ensure_alert_levels(db)
     except Exception:
         logger.exception("平台基础配置初始化失败")
 
@@ -333,6 +335,23 @@ def _ensure_mgmt_alerts_columns() -> None:
                 )
             except Exception:
                 logger.exception("mgmt_alerts.category 历史数据回填失败（可忽略）")
+        if "alarm_level" not in cols:
+            conn.execute(
+                text("ALTER TABLE `mgmt_alerts` ADD COLUMN `alarm_level` INT NULL")
+            )
+            conn.execute(
+                text(
+                    "UPDATE `mgmt_alerts` SET `alarm_level` = 3 "
+                    "WHERE `category` = 'event' AND `alarm_level` IS NULL"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE `mgmt_alerts` SET `alarm_level` = 2 "
+                    "WHERE `alarm_level` IS NULL"
+                )
+            )
+            logger.info("已为 mgmt_alerts 增加 alarm_level 列")
 
 
 def _ensure_task_schedule_column() -> None:

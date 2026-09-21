@@ -62,6 +62,7 @@ def build_webhook_payload(
         "alert_id": row.alert_uid,
         "id": row.id,
         "category": row.category or "alert",
+        "alarm_level": int(row.alarm_level) if row.alarm_level in (1, 2, 3) else None,
         "recognition_types": _as_str_list(row.recognition_types),
         "scene_id": row.scene_id or "",
         "skill_name": row.skill_name or "",
@@ -163,6 +164,7 @@ def _alert_to_dict(r: AlertRecord) -> Dict[str, Any]:
         "image_url": d.get("image_url"),
         "video_url": d.get("video_url"),
         "category": str(d.get("category") or "alert"),
+        "alarm_level": int(d["alarm_level"]) if d.get("alarm_level") in (1, 2, 3) else None,
         "status": str(d.get("status") or "new"),
         "created_at": created_s,
     }
@@ -193,6 +195,7 @@ def _dict_to_alert(data: Dict[str, Any]) -> AlertRecord:
         image_url=data.get("image_url"),
         video_url=data.get("video_url"),
         category=str(data.get("category") or "alert"),
+        alarm_level=int(data["alarm_level"]) if data.get("alarm_level") in (1, 2, 3) else None,
         status=str(data.get("status") or "new"),
         created_at=created_at,
     )

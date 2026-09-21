@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import AlertLevelBadge, { normalizeAlertLevel } from "../components/AlertLevelBadge";
 import Pager from "../components/Pager";
+import TypeSelect, { TypeLines } from "../components/TypeSelect";
 
 const PAGE_SIZE = 10;
 
@@ -15,11 +17,19 @@ function EvidenceIcon() {
   );
 }
 
-function typeLabel(a: any): string {
-  const codes = (a.recognition_types || []).filter(Boolean);
-  if (codes.length) return codes.join(",");
-  if (a.skill_name === "person_presence_detector26") return "画面人数";
-  return "-";
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  "01": "人员计数（入）",
+  "02": "人员计数（出）",
+};
+
+const EVENT_TYPE_OPTIONS = [
+  { value: "", label: "全部类型" },
+  ...Object.entries(EVENT_TYPE_LABELS).map(([code, desc]) => ({ value: code, code, desc })),
+  { value: "presence", label: "画面人数" },
+];
+
+function eventTypeCodes(a: any): string[] {
+  return (a.recognition_types || []).filter(Boolean).map((t: unknown) => String(t));
 }
 
 export default function EventsPage() {
@@ -104,15 +114,11 @@ export default function EventsPage() {
             disabled={recognitionType === "presence"}
             onChange={(e) => setSkillName(e.target.value)}
           />
-          <select
+          <TypeSelect
             value={recognitionType}
-            onChange={(e) => setRecognitionType(e.target.value)}
-          >
-            <option value="">全部类型</option>
-            <option value="01">01 人员计数（入）</option>
-            <option value="02">02 人员计数（出）</option>
-            <option value="presence">画面人数</option>
-          </select>
+            onChange={setRecognitionType}
+            options={EVENT_TYPE_OPTIONS}
+          />
           <input
             type="datetime-local"
             title="起始时间"
@@ -162,6 +168,7 @@ export default function EventsPage() {
                 <th>时间</th>
                 <th>场景</th>
                 <th>类型</th>
+                <th>报警等级</th>
                 <th>人数</th>
                 <th>截图</th>
                 <th>状态</th>
@@ -178,7 +185,18 @@ export default function EventsPage() {
                       {a.scene_id}
                       <div className="muted mono">{a.skill_name || "-"}</div>
                     </td>
-                    <td className="mono">{typeLabel(a)}</td>
+                    <td>
+                      <TypeLines
+                        codes={eventTypeCodes(a)}
+                        labels={EVENT_TYPE_LABELS}
+                        fallback={
+                          a.skill_name === "person_presence_detector26" ? "画面人数" : "-"
+                        }
+                      />
+                    </td>
+                    <td>
+                      <AlertLevelBadge level={normalizeAlertLevel(a.alarm_level, 3)} />
+                    </td>
                     <td>
                       count={a.count} / enter={a.enter_count}
                     </td>
@@ -228,7 +246,7 @@ export default function EventsPage() {
               })}
               {!items.length && (
                 <tr>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     暂无事件。正常过线或画面人数变化后会自动写入。
                   </td>
                 </tr>

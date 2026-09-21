@@ -981,6 +981,7 @@ def _clone_alert_record(row: AlertRecord) -> AlertRecord:
         image_url=row.image_url,
         video_url=row.video_url,
         category=str(row.category or "alert"),
+        alarm_level=int(row.alarm_level) if row.alarm_level in (1, 2, 3) else None,
         payload=payload,
         status=str(row.status or "new"),
         created_at=row.created_at,
@@ -1009,6 +1010,15 @@ def persist_alert_event(event: Dict[str, Any]) -> Optional[AlertRecord]:
             ).first()
             if existing:
                 return _clone_alert_record(existing)
+            from app.services.alert_level_service import resolve_alarm_level
+
+            alarm_level = resolve_alarm_level(
+                db,
+                recognition_types=event.get("recognition_types"),
+                skill_name=str(event.get("skill_name") or ""),
+                category=category,
+            )
+            event["alarm_level"] = alarm_level
             row = AlertRecord(
                 alert_uid=uid,
                 scene_id=str(event.get("scene_id") or ""),
@@ -1020,6 +1030,7 @@ def persist_alert_event(event: Dict[str, Any]) -> Optional[AlertRecord]:
                 image_url=event.get("image_minio_url") or event.get("pic_url"),
                 video_url=event.get("video_minio_url") or event.get("video_url"),
                 category=category,
+                alarm_level=alarm_level,
                 payload=event,
                 status="new",
             )

@@ -197,6 +197,8 @@ class AlertRecord(Base):
     category: Mapped[str] = mapped_column(
         String(16), default="alert", nullable=False, index=True
     )
+    # 入库时按类型键查报警等级配置写入；1 严重 / 2 警告 / 3 提示。之后改配置不影响本行。
+    alarm_level: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="new", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -252,6 +254,23 @@ class PlatformSettings(Base):
         nullable=False,
     )
     logo_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AlertLevelConfig(Base):
+    """识别类型的报警等级。按类型键一行，不按摄像头或任务区分。"""
+
+    __tablename__ = "mgmt_alert_levels"
+
+    type_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name_zh: Mapped[str] = mapped_column(String(64), nullable=False)
+    # event=事件管理；alert=报警管理。只决定列表归属，不随等级变化。
+    category: Mapped[str] = mapped_column(String(16), nullable=False)
+    # 1 严重 / 2 警告 / 3 提示
+    level: Mapped[int] = mapped_column(Integer, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )

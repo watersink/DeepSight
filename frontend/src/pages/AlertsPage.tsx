@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import AlertLevelBadge, { normalizeAlertLevel } from "../components/AlertLevelBadge";
 import Pager from "../components/Pager";
+import TypeSelect, { TypeLines } from "../components/TypeSelect";
 
 const PAGE_SIZE = 10;
 
@@ -14,6 +16,18 @@ function EvidenceIcon() {
     </svg>
   );
 }
+
+const ALERT_TYPE_LABELS: Record<string, string> = {
+  "04": "非常规通道入井",
+  "05": "非常规通道出井",
+  "06": "入井闸机出闸",
+  "07": "出井闸机入闸",
+};
+
+const ALERT_TYPE_OPTIONS = [
+  { value: "", label: "全部类型" },
+  ...Object.entries(ALERT_TYPE_LABELS).map(([code, desc]) => ({ value: code, code, desc })),
+];
 
 function resolveVideoUrl(a: any): string | null {
   return (
@@ -167,16 +181,11 @@ export default function AlertsPage() {
             value={skillName}
             onChange={(e) => setSkillName(e.target.value)}
           />
-          <select
+          <TypeSelect
             value={recognitionType}
-            onChange={(e) => setRecognitionType(e.target.value)}
-          >
-            <option value="">全部类型</option>
-            <option value="04">04 非常规通道入井</option>
-            <option value="05">05 非常规通道出井</option>
-            <option value="06">06 入井闸机出闸</option>
-            <option value="07">07 出井闸机入闸</option>
-          </select>
+            onChange={setRecognitionType}
+            options={ALERT_TYPE_OPTIONS}
+          />
           <input
             type="datetime-local"
             title="起始时间"
@@ -226,6 +235,7 @@ export default function AlertsPage() {
                 <th>时间</th>
                 <th>场景</th>
                 <th>类型</th>
+                <th>报警等级</th>
                 <th>人数</th>
                 <th>证据</th>
                 <th>状态</th>
@@ -246,8 +256,14 @@ export default function AlertsPage() {
                       {a.scene_id}
                       <div className="muted mono">{a.skill_name || "-"}</div>
                     </td>
-                    <td className="mono">
-                      {(a.recognition_types || []).join(",") || "-"}
+                    <td>
+                      <TypeLines
+                        codes={(a.recognition_types || []).map((t: unknown) => String(t)).filter(Boolean)}
+                        labels={ALERT_TYPE_LABELS}
+                      />
+                    </td>
+                    <td>
+                      <AlertLevelBadge level={normalizeAlertLevel(a.alarm_level, 2)} />
                     </td>
                     <td>
                       count={a.count} / enter={a.enter_count}
@@ -298,7 +314,7 @@ export default function AlertsPage() {
               })}
               {!items.length && (
                 <tr>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     暂无报警。产生告警后会自动写入 MySQL。
                   </td>
                 </tr>

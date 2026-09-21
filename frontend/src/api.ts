@@ -303,4 +303,26 @@ export const api = {
       body: fd,
     });
   },
+
+  getAlertLevels: () =>
+    request<
+      {
+        type_key: string;
+        name_zh: string;
+        category: string;
+        level: number;
+        sort_order: number;
+      }[]
+    >("/api/v1/alert-levels"),
+  updateAlertLevel: (typeKey: string, level: number) =>
+    request<{
+      type_key: string;
+      name_zh: string;
+      category: string;
+      level: number;
+      sort_order: number;
+    }>(`/api/v1/alert-levels/${encodeURIComponent(typeKey)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ level }),
+    }),
 };
