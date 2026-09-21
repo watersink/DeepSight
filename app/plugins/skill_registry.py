@@ -73,6 +73,75 @@ _SKIP_PARAM_KEYS = {
 
 _LINE_PARAM_KEYS = {"count_line", "bypass_line"}
 
+# 与 app.services.tracker_service.TRACKING_ALGORITHMS / app.services.trackers 保持一致
+_TRACKING_ALGORITHMS = (
+    "sort",
+    "bytetrack",
+    "botsort",
+    "ocsort",
+    "fasttrack",
+    "deepocsort",
+    "tracktrack",
+)
+_TRACKING_ALGORITHM_LABELS: Dict[str, str] = {
+    "sort": "SORT",
+    "bytetrack": "ByteTrack",
+    "botsort": "BoT-SORT",
+    "ocsort": "OC-SORT",
+    "fasttrack": "FastTracker",
+    "deepocsort": "Deep OC-SORT",
+    "tracktrack": "TrackTrack",
+}
+
+
+def _merge_form_fields(
+    base: List[Any],
+    extra: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    merged = [item for item in base if isinstance(item, dict)]
+    seen = {str(item.get("key")) for item in merged if item.get("key")}
+    for item in extra:
+        key = str(item.get("key") or "")
+        if not key or key in seen:
+            continue
+        merged.append(item)
+        seen.add(key)
+    return merged
+
+
+def tracking_form_fields(params: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """技能支持跟踪时，追加任务配置页的启用开关与算法下拉。"""
+    if not isinstance(params, dict) or "enable_default_sort_tracking" not in params:
+        return []
+    algo = str(params.get("tracking_algorithm") or "sort").strip().lower()
+    if algo not in _TRACKING_ALGORITHMS:
+        algo = "sort"
+    return [
+        {
+            "key": "enable_default_sort_tracking",
+            "label": "启用跟踪",
+            "type": "bool",
+            "required": False,
+            "default": bool(params.get("enable_default_sort_tracking", True)),
+            "hint": "关闭后不做目标跟踪",
+        },
+        {
+            "key": "tracking_algorithm",
+            "label": "跟踪算法",
+            "type": "select",
+            "required": False,
+            "default": algo,
+            "options": [
+                {
+                    "value": name,
+                    "label": _TRACKING_ALGORITHM_LABELS.get(name, name),
+                }
+                for name in _TRACKING_ALGORITHMS
+            ],
+            "hint": "仅在启用跟踪后生效",
+        },
+    ]
+
 
 def _format_param_value(key: str, value: Any) -> str:
     if key in _LINE_PARAM_KEYS:
@@ -127,7 +196,10 @@ def list_available_skills() -> List[Dict[str, Any]]:
             "cover_image": cfg.get("cover_image")
             or f"/skills/{cfg.get('name')}.png",
             # 任务配置表单按此声明渲染；未声明则不展示计数/画线等专用项
-            "form_fields": cfg.get("form_fields") or [],
+            "form_fields": _merge_form_fields(
+                cfg.get("form_fields") or [],
+                tracking_form_fields(cfg.get("params")),
+            ),
             "params": skill_param_items(cfg),
             "alert_definitions": cfg.get("alert_definitions") or [],
         })

@@ -60,7 +60,7 @@ class BoardingDetectorSkill(BaseSkill):
     DEFAULT_CONFIG = {
         "type": "detection",
         "name": "boarding_detector",
-        "name_zh": "上车人数统计(YOLO26)",
+        "name_zh": "固定停车人数统计(YOLO26)",
         "version": "1.0",
         "cover_image": "/skills/boarding_detector.png",
         "description": (

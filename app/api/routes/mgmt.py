@@ -751,6 +751,8 @@ def test_partner_webhook(
         raise HTTPException(status_code=404, detail="接入配置不存在")
     if not (row.webhook_url or "").strip():
         raise HTTPException(status_code=400, detail="未配置 Webhook URL")
+    if not row.enabled:
+        raise HTTPException(status_code=400, detail="接入已停用，不会推送")
     sample = AlertRecord(
         id=0,
         alert_uid="test_webhook_ping",

@@ -1,5 +1,6 @@
 import { FormEvent, MouseEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import Pager from "../components/Pager";
 import StreamPlayerModal from "../components/StreamPlayerModal";
 
 type Sel =
@@ -718,30 +719,12 @@ export default function CamerasPage() {
                 </tbody>
               </table>
             </div>
-            <div className="pager">
-              <button
-                className="btn"
-                type="button"
-                disabled={safePage <= 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                上一页
-              </button>
-              <span className="muted">
-                第 {safePage} / {totalPages} 页
-                {selectedCameras.length
-                  ? ` · 每页 ${PAGE_SIZE} 条`
-                  : ""}
-              </span>
-              <button
-                className="btn"
-                type="button"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              >
-                下一页
-              </button>
-            </div>
+            <Pager
+              page={safePage}
+              pageSize={PAGE_SIZE}
+              total={selectedCameras.length}
+              onChange={setPage}
+            />
           </div>
         </div>
       </div>

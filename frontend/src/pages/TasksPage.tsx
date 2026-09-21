@@ -32,6 +32,8 @@ type SkillBinding = {
   count_line_text: string;
   bypass_line_text: string;
   algorithm_config_id: number | null;
+  enable_tracking: boolean;
+  tracking_algorithm: string;
 };
 
 type TaskForm = {
@@ -69,6 +71,48 @@ const defaultSchedule = (): TaskScheduleForm => ({
   end_time: "18:00",
 });
 
+const TRACKING_ALGORITHM_OPTIONS = [
+  { value: "sort", label: "SORT" },
+  { value: "bytetrack", label: "ByteTrack" },
+  { value: "botsort", label: "BoT-SORT" },
+  { value: "ocsort", label: "OC-SORT" },
+  { value: "fasttrack", label: "FastTracker" },
+  { value: "deepocsort", label: "Deep OC-SORT" },
+  { value: "tracktrack", label: "TrackTrack" },
+];
+
+function skillSupportsTracking(skills: any[], skillName: string) {
+  const s = skills.find((x) => x.skill_name === skillName);
+  if (!s) return true;
+  const fields = Array.isArray(s.form_fields) ? s.form_fields : [];
+  if (fields.some((f: any) => f?.key === "enable_default_sort_tracking")) return true;
+  const params = Array.isArray(s.params) ? s.params : [];
+  return params.some((p: any) => p?.key === "enable_default_sort_tracking");
+}
+
+function trackingDefaults(skills: any[], skillName: string, extra?: any) {
+  const fields = skillFormFields(skills, skillName);
+  const enableField = findFormField(fields, "enable_default_sort_tracking");
+  const algoField = findFormField(fields, "tracking_algorithm");
+  const options = algoField?.options?.length
+    ? algoField.options
+    : TRACKING_ALGORITHM_OPTIONS;
+  const defaultEnable =
+    enableField == null
+      ? true
+      : enableField.default !== false &&
+        enableField.default !== "0" &&
+        enableField.default !== "false";
+  const defaultAlgo = String(algoField?.default || options[0]?.value || "sort");
+  const savedEnable = extra?.enable_default_sort_tracking;
+  const savedAlgo = extra?.tracking_algorithm;
+  return {
+    enable_tracking: savedEnable == null ? defaultEnable : !!savedEnable,
+    tracking_algorithm: String(savedAlgo || defaultAlgo),
+    algorithmOptions: options as { value: string; label: string }[],
+  };
+}
+
 function emptySkill(skillName = "person_presence_detector26"): SkillBinding {
   return {
     key: nextSkillKey(),
@@ -78,6 +122,8 @@ function emptySkill(skillName = "person_presence_detector26"): SkillBinding {
     count_line_text: "",
     bypass_line_text: "",
     algorithm_config_id: null,
+    enable_tracking: true,
+    tracking_algorithm: "sort",
   };
 }
 
@@ -328,6 +374,9 @@ export default function TasksPage() {
     const algo = algoById.get(t.algorithm_config_id);
     const sch = t.schedule || {};
     const wid = t.worker_id || workers[0]?.id || "local";
+    const skillName =
+      algo?.skill_name || t.skill_name || selectableSkills[0]?.skill_name || "";
+    const track = trackingDefaults(skills, skillName, algo?.extra_params);
     setEditingId(t.id);
     setForm({
       name: t.name || "",
@@ -354,8 +403,7 @@ export default function TasksPage() {
       skills: [
         {
           key: nextSkillKey(),
-          skill_name:
-            algo?.skill_name || t.skill_name || selectableSkills[0]?.skill_name || "",
+          skill_name: skillName,
           gate_direction: algo?.gate_direction || "IN",
           enter_count: algo?.enter_count ?? 0,
           count_line_text: algo?.count_line
@@ -365,6 +413,8 @@ export default function TasksPage() {
             ? JSON.stringify(algo.bypass_line, null, 2)
             : "",
           algorithm_config_id: t.algorithm_config_id ?? null,
+          enable_tracking: track.enable_tracking,
+          tracking_algorithm: track.tracking_algorithm,
         },
       ],
     });
@@ -446,7 +496,7 @@ export default function TasksPage() {
               form.skills.length
             );
 
-        const algoBody = {
+        const algoBody: Record<string, unknown> = {
           name: `${finalTaskName}-算法参数`,
           skill_name: s.skill_name,
           gate_direction: s.gate_direction,
@@ -456,6 +506,17 @@ export default function TasksPage() {
           enabled: form.enabled,
           remark: form.remark || "",
         };
+        if (skillSupportsTracking(skills, s.skill_name)) {
+          const prevExtra =
+            isCurrentTask && s.algorithm_config_id
+              ? algoById.get(s.algorithm_config_id)?.extra_params || {}
+              : {};
+          algoBody.extra_params = {
+            ...prevExtra,
+            enable_default_sort_tracking: !!s.enable_tracking,
+            tracking_algorithm: s.tracking_algorithm || "sort",
+          };
+        }
 
         let algorithmConfigId = s.algorithm_config_id;
         if (isCurrentTask && algorithmConfigId) {
@@ -1031,9 +1092,15 @@ export default function TasksPage() {
                           技能
                           <select
                             value={s.skill_name}
-                            onChange={(e) =>
-                              updateSkill(s.key, { skill_name: e.target.value })
-                            }
+                            onChange={(e) => {
+                              const skill_name = e.target.value;
+                              const defaults = trackingDefaults(skills, skill_name);
+                              updateSkill(s.key, {
+                                skill_name,
+                                enable_tracking: defaults.enable_tracking,
+                                tracking_algorithm: defaults.tracking_algorithm,
+                              });
+                            }}
                           >
                             {selectableSkills.map((opt) => (
                               <option key={opt.skill_name} value={opt.skill_name}>
@@ -1045,6 +1112,45 @@ export default function TasksPage() {
                             )}
                           </select>
                         </label>
+                        {skillSupportsTracking(skills, s.skill_name) && (
+                          <label>
+                            启用跟踪
+                            <select
+                              value={s.enable_tracking ? "1" : "0"}
+                              onChange={(e) =>
+                                updateSkill(s.key, {
+                                  enable_tracking: e.target.value === "1",
+                                })
+                              }
+                            >
+                              <option value="0">不启用</option>
+                              <option value="1">启用</option>
+                            </select>
+                          </label>
+                        )}
+                        {skillSupportsTracking(skills, s.skill_name) &&
+                          s.enable_tracking && (
+                            <label>
+                              跟踪算法
+                              <select
+                                value={s.tracking_algorithm}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    tracking_algorithm: e.target.value,
+                                  })
+                                }
+                              >
+                                {trackingDefaults(
+                                  skills,
+                                  s.skill_name
+                                ).algorithmOptions.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label || opt.value}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          )}
                         {gateField && (
                           <label>
                             {gateField.label || "方向"}

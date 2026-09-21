@@ -343,6 +343,10 @@ class StreamStartRequest(BaseModel):
         description="算力 Worker 节点 ID；省略时使用 DEFAULT_WORKER_ID / WORKER_NODES 默认项",
         examples=["local", "gpu1"],
     )
+    push_annotated_stream: bool = Field(
+        default=True,
+        description="是否把识别后的画面推到 out_url。为 false 时任务仍会运行，但 flv_url 没有流，播放器打不开。",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

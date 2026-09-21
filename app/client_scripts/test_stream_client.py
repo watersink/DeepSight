@@ -175,6 +175,7 @@ def _build_start_payload(args) -> Dict[str, Any]:
         "bitrate": args.bitrate,
         "buffer_size": args.buffer_size,
         "reconnect_delay": args.reconnect_delay,
+        "push_annotated_stream": not args.no_push,
     }
     if args.fence_config:
         payload["fence_config"] = _parse_json_arg(args.fence_config, "fence_config")
@@ -212,6 +213,7 @@ def cmd_start(client: StreamServiceClient, args):
     print("\n启动成功:")
     _print_json(result)
     print(f"\ntask_id = {result.get('task_id')}")
+    print(f"播放地址（浏览器/播放器打开这个，不要打开 rtmp 地址）: {result.get('flv_url')}")
     print("查询状态: python ./app/client_scripts/test_stream_client.py status --task_id", result.get("task_id"))
     print("停止任务: python ./app/client_scripts/test_stream_client.py stop --task_id", result.get("task_id"))
 
@@ -308,6 +310,11 @@ def _add_common_start_args(parser: argparse.ArgumentParser):
     )
     parser.add_argument("--queue_size", type=int, default=settings.STREAM_QUEUE_SIZE)
     parser.add_argument("--no_hw_encode", action="store_true", help="禁用硬件编码")
+    parser.add_argument(
+        "--no_push",
+        action="store_true",
+        help="不推识别后的画面。默认会推流，否则 flv_url 没有流，播放器打不开",
+    )
     parser.add_argument("--bitrate", default=settings.STREAM_BITRATE)
     parser.add_argument("--buffer_size", default=settings.STREAM_BUFFER_SIZE)
     parser.add_argument("--reconnect_delay", type=float, default=settings.STREAM_RECONNECT_DELAY)

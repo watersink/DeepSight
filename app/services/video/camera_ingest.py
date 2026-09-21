@@ -111,7 +111,7 @@ class CameraFanoutPipeline:
                 resolved.get("alarm_interval", settings.DEFAULT_ALARM_INTERVAL)
             )
             queue_size = int(resolved.get("queue_size", self.queue_size))
-            push_stream = bool(resolved.get("push_annotated_stream", False))
+            push_stream = bool(resolved.get("push_annotated_stream", True))
             alert_image_enabled = bool(resolved.get("alert_image_enabled", True))
             alert_video_enabled = bool(resolved.get("alert_video_enabled", False))
 

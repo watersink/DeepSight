@@ -212,7 +212,7 @@ export default function PartnersPage() {
                   </td>
                   <td>
                     <span className={`badge ${p.enabled ? "run" : "stop"}`}>
-                      {p.enabled ? "启用" : "禁用"}
+                      {p.enabled ? "启用" : "停用"}
                     </span>
                   </td>
                   <td className="row-actions">
@@ -220,9 +220,37 @@ export default function PartnersPage() {
                       编辑
                     </button>
                     <button
+                      className={p.enabled ? "btn danger" : "btn primary"}
+                      type="button"
+                      onClick={async () => {
+                        const next = !p.enabled;
+                        try {
+                          await api.updatePartner(p.id, { enabled: next });
+                          setMsg(
+                            next
+                              ? `已启用 ${p.name}，将按订阅推送`
+                              : `已停用 ${p.name}，不再推送`
+                          );
+                          setError("");
+                          await load(page);
+                        } catch (err: any) {
+                          setError(err.message || String(err));
+                        }
+                      }}
+                    >
+                      {p.enabled ? "停用" : "启用"}
+                    </button>
+                    <button
                       className="btn"
                       type="button"
-                      disabled={!p.webhook_url}
+                      disabled={!p.enabled || !p.webhook_url}
+                      title={
+                        !p.enabled
+                          ? "已停用，不会推送"
+                          : !p.webhook_url
+                            ? "未配置 Webhook"
+                            : ""
+                      }
                       onClick={async () => {
                         try {
                           await api.testPartnerWebhook(p.id);
@@ -370,7 +398,7 @@ export default function PartnersPage() {
                   }
                 >
                   <option value="1">启用</option>
-                  <option value="0">禁用</option>
+                  <option value="0">停用</option>
                 </select>
               </label>
               <label className="full">
