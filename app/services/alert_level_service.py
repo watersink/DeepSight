@@ -64,6 +64,20 @@ DEFAULT_ALERT_LEVELS: List[Dict[str, Any]] = [
         "level": DEFAULT_ALERT_LEVEL,
         "sort_order": 70,
     },
+    {
+        "type_key": "08",
+        "name_zh": "摄像头位置挪移",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 80,
+    },
+    {
+        "type_key": "09",
+        "name_zh": "摄像头角度偏离",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 90,
+    },
 ]
 
 

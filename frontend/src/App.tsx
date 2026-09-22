@@ -14,6 +14,8 @@ import UsersPage from "./pages/UsersPage";
 import PartnersPage from "./pages/PartnersPage";
 import PlatformSettingsPage from "./pages/PlatformSettingsPage";
 import AlertLevelsPage from "./pages/AlertLevelsPage";
+import LlmSettingsPage from "./pages/LlmSettingsPage";
+import LlmAssistantPage from "./pages/LlmAssistantPage";
 import LoginPage from "./pages/LoginPage";
 
 type NavLeaf = { to: string; label: string; end?: boolean; adminOnly?: boolean };
@@ -32,11 +34,13 @@ const navItems: NavEntry[] = [
   { to: "/live", label: "实时展示" },
   { to: "/events", label: "事件管理" },
   { to: "/alerts", label: "报警管理" },
+  { to: "/assistant", label: "大模型助手" },
   {
     label: "系统管理",
     adminOnly: true,
     children: [
       { to: "/system/basic", label: "基础配置", adminOnly: true },
+      { to: "/system/llm", label: "大模型配置", adminOnly: true },
       { to: "/system/alert-levels", label: "报警等级管理", adminOnly: true },
       { to: "/system/partners", label: "第三方接入配置", adminOnly: true },
       { to: "/users", label: "用户管理", adminOnly: true },
@@ -147,11 +151,20 @@ function AppShell() {
           <Route path="/live" element={<LiveMonitorPage />} />
           <Route path="/events" element={<EventsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/assistant" element={<LlmAssistantPage />} />
           <Route
             path="/system/basic"
             element={
               <RequireAdmin>
                 <PlatformSettingsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/system/llm"
+            element={
+              <RequireAdmin>
+                <LlmSettingsPage />
               </RequireAdmin>
             }
           />

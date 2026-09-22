@@ -90,10 +90,12 @@ def init_db() -> None:
     from app.services.auth_service import seed_default_admin
     from app.services.platform_settings_service import ensure_platform_settings
     from app.services.alert_level_service import ensure_alert_levels
+    from app.services.llm_settings_service import ensure_llm_settings
 
     ensure_mysql_database()
     Base.metadata.create_all(bind=engine)
     _ensure_mgmt_alerts_columns()
+    _ensure_llm_settings_columns()
     _ensure_camera_tree_schema()
     _ensure_camera_ingest_columns()
     _ensure_task_schedule_column()
@@ -104,6 +106,7 @@ def init_db() -> None:
         with session_scope() as db:
             ensure_platform_settings(db)
             ensure_alert_levels(db)
+            ensure_llm_settings(db)
     except Exception:
         logger.exception("平台基础配置初始化失败")
 
@@ -352,6 +355,50 @@ def _ensure_mgmt_alerts_columns() -> None:
                 )
             )
             logger.info("已为 mgmt_alerts 增加 alarm_level 列")
+
+
+def _ensure_llm_settings_columns() -> None:
+    """已有库补齐 mgmt_llm_settings.name，支持多模型配置。"""
+    db_name = (settings.MYSQL_DB or "").strip()
+    if not db_name:
+        return
+    with engine.begin() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = 'mgmt_llm_settings'"
+                ),
+                {"db": db_name},
+            ).fetchall()
+        }
+        if not tables:
+            return
+        cols = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = 'mgmt_llm_settings'"
+                ),
+                {"db": db_name},
+            ).fetchall()
+        }
+        if "name" not in cols:
+            conn.execute(
+                text(
+                    "ALTER TABLE `mgmt_llm_settings` "
+                    "ADD COLUMN `name` VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE `mgmt_llm_settings` SET `name` = `model` "
+                    "WHERE `name` = '' OR `name` IS NULL"
+                )
+            )
+            logger.info("已为 mgmt_llm_settings 增加 name 列")
 
 
 def _ensure_task_schedule_column() -> None:

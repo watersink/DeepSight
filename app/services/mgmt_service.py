@@ -31,8 +31,8 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-07 报警；01/02 与画面人数等为事件
-ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07"})
+# 识别类型归类：04-08 报警；01/02 与画面人数等为事件
+ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07", "08", "09"})
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
 
@@ -781,29 +781,44 @@ def _enrich_task(row: TaskConfig) -> dict:
         "flv_url": None,
     }
     if row.last_runtime_task_id:
-        try:
-            d = runtime_gateway.get_task(row.last_runtime_task_id, worker_id=worker_id)
-        except WorkerApiError:
-            logger.exception(
-                "查询远程任务状态失败 task_cfg=%s runtime=%s worker=%s",
-                row.id,
-                row.last_runtime_task_id,
-                worker_id,
-            )
-            d = None
-        if d:
-            data["runtime_status"] = d.get("status")
-            if data["push_annotated_stream"]:
-                data["flv_url"] = settings.build_flv_play_url_from_out_url(d.get("out_url"))
-                if not data["flv_url"] and d.get("scene_id") and d.get("skill_name"):
-                    data["flv_url"] = settings.build_flv_play_url(
-                        d["scene_id"], d["skill_name"]
-                    )
-            data["ingest_branches"] = d.get("ingest_branches")
-            if d.get("worker_id"):
-                data["worker_id"] = d["worker_id"]
-            if d.get("worker_name"):
-                data["worker_name"] = d["worker_name"]
+        runtime_id = str(row.last_runtime_task_id)
+        if runtime_id.startswith("snap:"):
+            from app.services.snapshot_patrol import snapshot_patrol
+
+            d = snapshot_patrol.get_status(row.id)
+            if d:
+                data["runtime_status"] = d.get("status")
+                data["worker_id"] = d.get("worker_id") or "local"
+                data["worker_name"] = d.get("worker_name") or "本机巡检"
+                data["run_mode"] = "snapshot"
+        else:
+            try:
+                d = runtime_gateway.get_task(runtime_id, worker_id=worker_id)
+            except WorkerApiError:
+                logger.exception(
+                    "查询远程任务状态失败 task_cfg=%s runtime=%s worker=%s",
+                    row.id,
+                    runtime_id,
+                    worker_id,
+                )
+                d = None
+            if d:
+                data["runtime_status"] = d.get("status")
+                if data["push_annotated_stream"]:
+                    data["flv_url"] = settings.build_flv_play_url_from_out_url(d.get("out_url"))
+                    if not data["flv_url"] and d.get("scene_id") and d.get("skill_name"):
+                        data["flv_url"] = settings.build_flv_play_url(
+                            d["scene_id"], d["skill_name"]
+                        )
+                data["ingest_branches"] = d.get("ingest_branches")
+                if d.get("worker_id"):
+                    data["worker_id"] = d["worker_id"]
+                if d.get("worker_name"):
+                    data["worker_name"] = d["worker_name"]
+    if row.algorithm_config:
+        from app.plugins.skill_registry import get_skill_run_mode
+
+        data["run_mode"] = get_skill_run_mode(row.algorithm_config.skill_name)
     return data
 
 
@@ -932,8 +947,29 @@ def build_stream_payload(row: TaskConfig) -> Dict[str, Any]:
 
 def start_task_config(db: Session, row: TaskConfig) -> dict:
     from app.services.task_scheduler import assert_manual_start_allowed
+    from app.plugins.skill_registry import is_snapshot_skill
+    from app.services.snapshot_patrol import snapshot_patrol
 
     assert_manual_start_allowed(row)
+    algo = row.algorithm_config
+    if algo and is_snapshot_skill(algo.skill_name):
+        # 周期截图巡检跑在 API 进程，不走 Worker 解码
+        if not row.enabled:
+            raise ValueError("任务配置已禁用")
+        if not row.camera or not row.camera.enabled:
+            raise ValueError("摄像头已禁用")
+        if not algo.enabled:
+            raise ValueError("算法配置已禁用")
+        extras = dict(algo.extra_params or {})
+        if not str(extras.get("reference_image_url") or "").strip():
+            raise ValueError("请先配置校准模板图片地址")
+        runtime = snapshot_patrol.start(row.id)
+        row.last_runtime_task_id = runtime["task_id"]
+        row.worker_id = "local"
+        db.commit()
+        refreshed = get_task(db, row.id)
+        return _enrich_task(refreshed)
+
     payload = build_stream_payload(row)
     worker_id = _validate_worker_id(getattr(row, "worker_id", None))
     try:
@@ -950,9 +986,22 @@ def start_task_config(db: Session, row: TaskConfig) -> dict:
 def stop_task_config(db: Session, row: TaskConfig) -> dict:
     if not row.last_runtime_task_id:
         raise ValueError("该任务尚未启动过运行时实例")
+    runtime_id = str(row.last_runtime_task_id)
+    if runtime_id.startswith("snap:"):
+        from app.services.snapshot_patrol import snapshot_patrol
+
+        try:
+            snapshot_patrol.stop_by_runtime_id(runtime_id)
+        except Exception as e:
+            raise ValueError(str(e)) from e
+        row.last_runtime_task_id = None
+        db.commit()
+        refreshed = get_task(db, row.id)
+        return _enrich_task(refreshed)
+
     worker_id = getattr(row, "worker_id", None) or settings.DEFAULT_WORKER_ID
     try:
-        runtime_gateway.stop_task(row.last_runtime_task_id, worker_id=worker_id)
+        runtime_gateway.stop_task(runtime_id, worker_id=worker_id)
     except WorkerApiError as e:
         raise ValueError(str(e)) from e
     refreshed = get_task(db, row.id)

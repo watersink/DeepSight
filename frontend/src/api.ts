@@ -325,4 +325,86 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ level }),
     }),
+
+  getLlmSettings: () =>
+    request<{
+      items: {
+        id: number;
+        name: string;
+        enabled: boolean;
+        base_url: string;
+        model: string;
+        temperature: number;
+        max_tokens: number;
+        system_prompt: string;
+        has_api_key: boolean;
+        api_key_masked: string;
+        ready: boolean;
+        configured: boolean;
+      }[];
+    }>("/api/v1/llm-settings"),
+  createLlmSettings: (body: {
+    name: string;
+    base_url: string;
+    api_key?: string;
+    model: string;
+    temperature?: number;
+    max_tokens?: number;
+    system_prompt?: string;
+    enabled?: boolean;
+  }) =>
+    request<{
+      id: number;
+      name: string;
+      enabled: boolean;
+      base_url: string;
+      model: string;
+      temperature: number;
+      max_tokens: number;
+      system_prompt: string;
+      has_api_key: boolean;
+      api_key_masked: string;
+      ready: boolean;
+      configured: boolean;
+    }>("/api/v1/llm-settings", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateLlmSettings: (
+    id: number,
+    body: {
+      name?: string;
+      enabled?: boolean;
+      base_url?: string;
+      api_key?: string;
+      model?: string;
+      temperature?: number;
+      max_tokens?: number;
+      system_prompt?: string;
+      clear_api_key?: boolean;
+    }
+  ) =>
+    request<{
+      id: number;
+      name: string;
+      enabled: boolean;
+      base_url: string;
+      model: string;
+      temperature: number;
+      max_tokens: number;
+      system_prompt: string;
+      has_api_key: boolean;
+      api_key_masked: string;
+      ready: boolean;
+      configured: boolean;
+    }>(`/api/v1/llm-settings/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteLlmSettings: (id: number) =>
+    request(`/api/v1/llm-settings/${id}`, { method: "DELETE" }),
+  getLlmOptions: () =>
+    request<{
+      items: { id: number; name: string; model: string; base_url: string }[];
+    }>("/api/v1/llm-settings/options"),
 };

@@ -6,6 +6,8 @@ import coverCount26 from "../assets/skills/person_count_detector26.png";
 import coverPresence26 from "../assets/skills/person_presence_detector26.png";
 import coverBoarding from "../assets/skills/boarding_detector.png";
 import coverNonFixedParking from "../assets/skills/non_fixed_parking_boarding_detector.png";
+import coverCameraShift from "../assets/skills/camera_shift_detector.png";
+import coverCameraTilt from "../assets/skills/camera_tilt_detector.png";
 
 const PAGE_SIZE = 10;
 type ViewMode = "list" | "tile";
@@ -17,6 +19,8 @@ const COVER_BY_SKILL: Record<string, string> = {
   person_presence_detector26: coverPresence26,
   boarding_detector: coverBoarding,
   non_fixed_parking_boarding_detector: coverNonFixedParking,
+  camera_shift_detector: coverCameraShift,
+  camera_tilt_detector: coverCameraTilt,
 };
 
 function coverOf(s: any): string {

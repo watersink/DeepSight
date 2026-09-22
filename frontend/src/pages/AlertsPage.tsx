@@ -22,6 +22,8 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   "05": "非常规通道出井",
   "06": "入井闸机出闸",
   "07": "出井闸机入闸",
+  "08": "摄像头位置挪移",
+  "09": "摄像头角度偏离",
 };
 
 const ALERT_TYPE_OPTIONS = [

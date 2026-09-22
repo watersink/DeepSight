@@ -34,6 +34,15 @@ type SkillBinding = {
   algorithm_config_id: number | null;
   enable_tracking: boolean;
   tracking_algorithm: string;
+  /** snapshot 模式 */
+  reference_image_url: string;
+  check_interval_sec: number;
+  shift_threshold_px: number;
+  tilt_threshold_deg: number;
+  perspective_threshold: number;
+  confirm_count: number;
+  cooldown_sec: number;
+  ssim_skip_threshold: number;
 };
 
 type TaskForm = {
@@ -81,7 +90,14 @@ const TRACKING_ALGORITHM_OPTIONS = [
   { value: "tracktrack", label: "TrackTrack" },
 ];
 
+function skillRunMode(skills: any[], skillName: string): "stream" | "snapshot" {
+  const s = skills.find((x) => x.skill_name === skillName);
+  const mode = String(s?.run_mode || "stream").toLowerCase();
+  return mode === "snapshot" ? "snapshot" : "stream";
+}
+
 function skillSupportsTracking(skills: any[], skillName: string) {
+  if (skillRunMode(skills, skillName) === "snapshot") return false;
   const s = skills.find((x) => x.skill_name === skillName);
   if (!s) return true;
   const fields = Array.isArray(s.form_fields) ? s.form_fields : [];
@@ -124,6 +140,14 @@ function emptySkill(skillName = "person_presence_detector26"): SkillBinding {
     algorithm_config_id: null,
     enable_tracking: true,
     tracking_algorithm: "sort",
+    reference_image_url: "",
+    check_interval_sec: 5,
+    shift_threshold_px: 40,
+    tilt_threshold_deg: 8,
+    perspective_threshold: 0.12,
+    confirm_count: 3,
+    cooldown_sec: 60,
+    ssim_skip_threshold: 0.92,
   };
 }
 
@@ -182,6 +206,34 @@ function skillFormFields(skills: any[], skillName: string): any[] {
 
 function findFormField(fields: any[], key: string) {
   return fields.find((f) => f?.key === key) || null;
+}
+
+function snapshotDefaults(skills: any[], skillName: string, extra?: any) {
+  const fields = skillFormFields(skills, skillName);
+  const num = (key: string, fallback: number) => {
+    const f = findFormField(fields, key);
+    const saved = extra?.[key];
+    if (saved != null && saved !== "") return Number(saved);
+    if (f?.default != null && f.default !== "") return Number(f.default);
+    return fallback;
+  };
+  const text = (key: string, fallback = "") => {
+    const f = findFormField(fields, key);
+    const saved = extra?.[key];
+    if (saved != null) return String(saved);
+    if (f?.default != null) return String(f.default);
+    return fallback;
+  };
+  return {
+    reference_image_url: text("reference_image_url"),
+    check_interval_sec: num("check_interval_sec", 5),
+    shift_threshold_px: num("shift_threshold_px", 40),
+    tilt_threshold_deg: num("tilt_threshold_deg", 8),
+    perspective_threshold: num("perspective_threshold", 0.12),
+    confirm_count: num("confirm_count", 3),
+    cooldown_sec: num("cooldown_sec", 60),
+    ssim_skip_threshold: num("ssim_skip_threshold", 0.92),
+  };
 }
 
 function normalizeTimeInput(v: string, fallback: string) {
@@ -246,7 +298,25 @@ export default function TasksPage() {
     return map;
   }, [algos]);
 
-  const selectableSkills = workerSkills.length ? workerSkills : skills;
+  const selectableSkills = useMemo(() => {
+    const base = workerSkills.length ? workerSkills : skills;
+    const byName = new Map<string, any>();
+    for (const s of base) byName.set(String(s.skill_name), s);
+    // snapshot 技能跑在 API 巡检，Worker 列表可能没有，始终并入
+    for (const s of skills) {
+      if (String(s.run_mode || "").toLowerCase() === "snapshot") {
+        byName.set(String(s.skill_name), s);
+      }
+    }
+    return Array.from(byName.values());
+  }, [workerSkills, skills]);
+
+  const formHasSnapshot = form.skills.some(
+    (s) => skillRunMode(skills, s.skill_name) === "snapshot"
+  );
+  const formHasStream = form.skills.some(
+    (s) => skillRunMode(skills, s.skill_name) !== "snapshot"
+  );
 
   const isEdit = editingId != null;
   const drawSkill = drawTarget
@@ -338,7 +408,20 @@ export default function TasksPage() {
       pool.find((s) => !used.has(s.skill_name))?.skill_name ||
       pool[0]?.skill_name ||
       "person_presence_detector26";
-    setForm((f) => ({ ...f, skills: [...f.skills, emptySkill(next)] }));
+    const track = trackingDefaults(skills, next);
+    const snap = snapshotDefaults(skills, next);
+    setForm((f) => ({
+      ...f,
+      skills: [
+        ...f.skills,
+        {
+          ...emptySkill(next),
+          enable_tracking: track.enable_tracking,
+          tracking_algorithm: track.tracking_algorithm,
+          ...snap,
+        },
+      ],
+    }));
   };
 
   const removeSkill = (key: string) => {
@@ -353,15 +436,22 @@ export default function TasksPage() {
       workers.find((w) => w.online !== false)?.id ||
       workers[0]?.id ||
       "local";
+    const firstSkill =
+      selectableSkills[0]?.skill_name || emptySkill().skill_name;
+    const track = trackingDefaults(skills, firstSkill);
+    const snap = snapshotDefaults(skills, firstSkill);
     setEditingId(null);
     setForm({
       ...emptyForm(),
       camera_id: cameras[0]?.id || 0,
       worker_id: defaultWorker,
       skills: [
-        emptySkill(
-          selectableSkills[0]?.skill_name || emptySkill().skill_name
-        ),
+        {
+          ...emptySkill(firstSkill),
+          enable_tracking: track.enable_tracking,
+          tracking_algorithm: track.tracking_algorithm,
+          ...snap,
+        },
       ],
     });
     setFormOpen(true);
@@ -377,6 +467,7 @@ export default function TasksPage() {
     const skillName =
       algo?.skill_name || t.skill_name || selectableSkills[0]?.skill_name || "";
     const track = trackingDefaults(skills, skillName, algo?.extra_params);
+    const snap = snapshotDefaults(skills, skillName, algo?.extra_params);
     setEditingId(t.id);
     setForm({
       name: t.name || "",
@@ -415,6 +506,7 @@ export default function TasksPage() {
           algorithm_config_id: t.algorithm_config_id ?? null,
           enable_tracking: track.enable_tracking,
           tracking_algorithm: track.tracking_algorithm,
+          ...snap,
         },
       ],
     });
@@ -460,6 +552,14 @@ export default function TasksPage() {
           }
           if (f.key === "gate_direction" && !String(s.gate_direction || "").trim()) {
             throw new Error(`技能「${label}」必须配置 ${f.label || "方向"}`);
+          }
+          if (f.key === "reference_image_url" && !String(s.reference_image_url || "").trim()) {
+            throw new Error(`技能「${label}」必须配置 ${f.label || "校准模板"}`);
+          }
+        }
+        if (skillRunMode(skills, s.skill_name) === "snapshot") {
+          if (!(Number(s.check_interval_sec) > 0)) {
+            throw new Error(`技能「${label}」检测间隔须大于 0`);
           }
         }
       }
@@ -517,6 +617,25 @@ export default function TasksPage() {
             tracking_algorithm: s.tracking_algorithm || "sort",
           };
         }
+        if (skillRunMode(skills, s.skill_name) === "snapshot") {
+          const prevExtra =
+            (algoBody.extra_params as Record<string, unknown>) ||
+            (isCurrentTask && s.algorithm_config_id
+              ? algoById.get(s.algorithm_config_id)?.extra_params || {}
+              : {});
+          algoBody.extra_params = {
+            ...prevExtra,
+            reference_image_url: String(s.reference_image_url || "").trim(),
+            check_interval_sec: Number(s.check_interval_sec) || 5,
+            shift_threshold_px: Number(s.shift_threshold_px) || 40,
+            tilt_threshold_deg: Number(s.tilt_threshold_deg) || 8,
+            perspective_threshold: Number(s.perspective_threshold) || 0.12,
+            confirm_count: Number(s.confirm_count) || 3,
+            cooldown_sec: Number(s.cooldown_sec) || 60,
+            ssim_skip_threshold: Number(s.ssim_skip_threshold) || 0.92,
+            enable_default_sort_tracking: false,
+          };
+        }
 
         let algorithmConfigId = s.algorithm_config_id;
         if (isCurrentTask && algorithmConfigId) {
@@ -529,18 +648,19 @@ export default function TasksPage() {
           }
         }
 
+        const isSnap = skillRunMode(skills, s.skill_name) === "snapshot";
         const taskBody = {
           name: finalTaskName,
           camera_id: Number(form.camera_id),
-          worker_id: form.worker_id || "local",
+          worker_id: isSnap ? "local" : form.worker_id || "local",
           algorithm_config_id: Number(algorithmConfigId),
           scene_id: sceneId,
           output_format: form.output_format,
           out_fps: Number(form.out_fps) || 15,
           enabled: form.enabled,
           alert_image_enabled: form.alert_image_enabled,
-          alert_video_enabled: form.alert_video_enabled,
-          push_annotated_stream: form.push_annotated_stream,
+          alert_video_enabled: isSnap ? false : form.alert_video_enabled,
+          push_annotated_stream: isSnap ? false : form.push_annotated_stream,
           remark: form.remark || "",
           schedule,
         };
@@ -584,7 +704,8 @@ export default function TasksPage() {
         <div>
           <h1>任务配置</h1>
           <p>
-            同一摄像头多技能共用一路解码（进程内 fan-out）；列表中仍按技能分条启停。
+            同一摄像头多技能共用一路解码（进程内 fan-out）；周期截图类技能由本机定时
+            ZLM 截图识别。列表中仍按技能分条启停。
           </p>
         </div>
         <div className="toolbar">
@@ -608,6 +729,7 @@ export default function TasksPage() {
                 <th>ID</th>
                 <th>名称</th>
                 <th>摄像头 / 技能</th>
+                <th>模式</th>
                 <th>Worker</th>
                 <th>运行时间段</th>
                 <th>运行状态</th>
@@ -622,6 +744,9 @@ export default function TasksPage() {
                   skillFormFields(skills, skillName),
                   "gate_direction"
                 );
+                const mode =
+                  t.run_mode ||
+                  skillRunMode(skills, skillName);
                 return (
                   <tr key={t.id}>
                     <td>{t.id}</td>
@@ -639,10 +764,19 @@ export default function TasksPage() {
                       </div>
                     </td>
                     <td>
-                      {t.worker_name || t.worker_id || "local"}
-                      <div className="muted mono" style={{ fontSize: 12 }}>
-                        {t.worker_id || "local"}
-                      </div>
+                      <span className={`badge ${mode === "snapshot" ? "level-3" : "run"}`}>
+                        {mode === "snapshot" ? "周期截图" : "实时视频"}
+                      </span>
+                    </td>
+                    <td>
+                      {mode === "snapshot"
+                        ? "本机巡检"
+                        : t.worker_name || t.worker_id || "local"}
+                      {mode !== "snapshot" && (
+                        <div className="muted mono" style={{ fontSize: 12 }}>
+                          {t.worker_id || "local"}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <div>{formatScheduleBrief(t.schedule)}</div>
@@ -738,7 +872,7 @@ export default function TasksPage() {
               })}
               {!items.length && (
                 <tr>
-                  <td colSpan={6} className="muted">
+                  <td colSpan={8} className="muted">
                     暂无任务。点击右上角「新增任务」开始配置。
                   </td>
                 </tr>
@@ -823,53 +957,65 @@ export default function TasksPage() {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    算力 Worker
-                    <select
-                      required
-                      value={form.worker_id || ""}
-                      onChange={(e) => {
-                        const wid = e.target.value;
-                        setForm({ ...form, worker_id: wid });
-                        loadWorkerSkills(wid);
-                      }}
-                    >
-                      {!workers.length && (
-                        <option value="local">本机 (local)</option>
-                      )}
-                      {workers.map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name || w.id}
-                          {w.online === false ? " · 离线" : ""}
-                          {w.local ? " · 本机" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    推流协议
-                    <select
-                      value={form.output_format}
-                      onChange={(e) =>
-                        setForm({ ...form, output_format: e.target.value })
-                      }
-                    >
-                      <option value="rtmp">rtmp</option>
-                      <option value="rtsp">rtsp</option>
-                    </select>
-                  </label>
-                  <label>
-                    out_fps
-                    <input
-                      type="number"
-                      min={1}
-                      max={60}
-                      value={form.out_fps}
-                      onChange={(e) =>
-                        setForm({ ...form, out_fps: Number(e.target.value) })
-                      }
-                    />
-                  </label>
+                  {formHasStream && (
+                    <label>
+                      算力 Worker
+                      <select
+                        required
+                        value={form.worker_id || ""}
+                        onChange={(e) => {
+                          const wid = e.target.value;
+                          setForm({ ...form, worker_id: wid });
+                          loadWorkerSkills(wid);
+                        }}
+                      >
+                        {!workers.length && (
+                          <option value="local">本机 (local)</option>
+                        )}
+                        {workers.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.name || w.id}
+                            {w.online === false ? " · 离线" : ""}
+                            {w.local ? " · 本机" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {formHasStream && (
+                    <label>
+                      推流协议
+                      <select
+                        value={form.output_format}
+                        onChange={(e) =>
+                          setForm({ ...form, output_format: e.target.value })
+                        }
+                      >
+                        <option value="rtmp">rtmp</option>
+                        <option value="rtsp">rtsp</option>
+                      </select>
+                    </label>
+                  )}
+                  {formHasStream && (
+                    <label>
+                      out_fps
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={form.out_fps}
+                        onChange={(e) =>
+                          setForm({ ...form, out_fps: Number(e.target.value) })
+                        }
+                      />
+                    </label>
+                  )}
+                  {formHasSnapshot && !formHasStream && (
+                    <label className="full">
+                      运行方式
+                      <input value="周期截图巡检（本机定时 ZLM 截图）" disabled />
+                    </label>
+                  )}
                   <label>
                     启用
                     <select
@@ -897,36 +1043,40 @@ export default function TasksPage() {
                       <option value="0">不需要</option>
                     </select>
                   </label>
-                  <label>
-                    报警视频
-                    <select
-                      value={form.alert_video_enabled ? "1" : "0"}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          alert_video_enabled: e.target.value === "1",
-                        })
-                      }
-                    >
-                      <option value="0">不需要（默认）</option>
-                      <option value="1">需要（截取证据视频）</option>
-                    </select>
-                  </label>
-                  <label>
-                    AI 识别结果推流
-                    <select
-                      value={form.push_annotated_stream ? "1" : "0"}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          push_annotated_stream: e.target.value === "1",
-                        })
-                      }
-                    >
-                      <option value="0">不需要（默认）</option>
-                      <option value="1">需要（画框后推流）</option>
-                    </select>
-                  </label>
+                  {formHasStream && (
+                    <label>
+                      报警视频
+                      <select
+                        value={form.alert_video_enabled ? "1" : "0"}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            alert_video_enabled: e.target.value === "1",
+                          })
+                        }
+                      >
+                        <option value="0">不需要（默认）</option>
+                        <option value="1">需要（截取证据视频）</option>
+                      </select>
+                    </label>
+                  )}
+                  {formHasStream && (
+                    <label>
+                      AI 识别结果推流
+                      <select
+                        value={form.push_annotated_stream ? "1" : "0"}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            push_annotated_stream: e.target.value === "1",
+                          })
+                        }
+                      >
+                        <option value="0">不需要（默认）</option>
+                        <option value="1">需要（画框后推流）</option>
+                      </select>
+                    </label>
+                  )}
                   <label className="full">
                     备注
                     <input
@@ -936,9 +1086,16 @@ export default function TasksPage() {
                   </label>
                 </div>
 
-                <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
-                  关闭「AI 识别结果推流」时不启动 FFmpeg 画框推流，FLV 预览不可用；关闭「报警视频」时不截取证据视频。
-                </p>
+                {formHasStream && (
+                  <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
+                    关闭「AI 识别结果推流」时不启动 FFmpeg 画框推流，FLV 预览不可用；关闭「报警视频」时不截取证据视频。
+                  </p>
+                )}
+                {formHasSnapshot && (
+                  <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
+                    周期截图技能按「检测间隔」调用 ZLM 截图识别，不占用实时解码 Worker；请预先提供校准模板图片地址。
+                  </p>
+                )}
 
                 <h3 className="section-title">运行时间段</h3>
                 <p className="muted" style={{ margin: "0 0 10px", fontSize: 12 }}>
@@ -1066,6 +1223,7 @@ export default function TasksPage() {
 
                 {form.skills.map((s, idx) => {
                   const fields = skillFormFields(skills, s.skill_name);
+                  const mode = skillRunMode(skills, s.skill_name);
                   const gateField = findFormField(fields, "gate_direction");
                   const enterField = findFormField(fields, "enter_count");
                   const countLineField = findFormField(fields, "count_line");
@@ -1076,6 +1234,12 @@ export default function TasksPage() {
                       <div className="skill-binding-head">
                         <strong>
                           {isEdit && idx === 0 ? "当前技能" : `技能 ${idx + 1}`}
+                          <span
+                            className={`badge ${mode === "snapshot" ? "level-3" : "run"}`}
+                            style={{ marginLeft: 8 }}
+                          >
+                            {mode === "snapshot" ? "周期截图" : "实时视频"}
+                          </span>
                         </strong>
                         {canRemove && (
                           <button
@@ -1095,16 +1259,21 @@ export default function TasksPage() {
                             onChange={(e) => {
                               const skill_name = e.target.value;
                               const defaults = trackingDefaults(skills, skill_name);
+                              const snap = snapshotDefaults(skills, skill_name);
                               updateSkill(s.key, {
                                 skill_name,
                                 enable_tracking: defaults.enable_tracking,
                                 tracking_algorithm: defaults.tracking_algorithm,
+                                ...snap,
                               });
                             }}
                           >
                             {selectableSkills.map((opt) => (
                               <option key={opt.skill_name} value={opt.skill_name}>
                                 {opt.name_zh || opt.skill_name}
+                                {String(opt.run_mode || "") === "snapshot"
+                                  ? " · 截图"
+                                  : ""}
                               </option>
                             ))}
                             {!selectableSkills.length && (
@@ -1112,6 +1281,125 @@ export default function TasksPage() {
                             )}
                           </select>
                         </label>
+                        {mode === "snapshot" && (
+                          <>
+                            <label className="full">
+                              校准模板图片地址 *
+                              <input
+                                required
+                                value={s.reference_image_url}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    reference_image_url: e.target.value,
+                                  })
+                                }
+                                placeholder="https://... 或服务器本地路径"
+                              />
+                            </label>
+                            <label>
+                              检测间隔（秒） *
+                              <input
+                                type="number"
+                                min={1}
+                                required
+                                value={s.check_interval_sec}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    check_interval_sec: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            {findFormField(fields, "shift_threshold_px") && (
+                              <label>
+                                平移告警阈值（像素）
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={s.shift_threshold_px}
+                                  onChange={(e) =>
+                                    updateSkill(s.key, {
+                                      shift_threshold_px: Number(e.target.value),
+                                    })
+                                  }
+                                />
+                              </label>
+                            )}
+                            {findFormField(fields, "tilt_threshold_deg") && (
+                              <label>
+                                转角告警阈值（度）
+                                <input
+                                  type="number"
+                                  min={0.1}
+                                  step={0.1}
+                                  value={s.tilt_threshold_deg}
+                                  onChange={(e) =>
+                                    updateSkill(s.key, {
+                                      tilt_threshold_deg: Number(e.target.value),
+                                    })
+                                  }
+                                />
+                              </label>
+                            )}
+                            {findFormField(fields, "perspective_threshold") && (
+                              <label>
+                                透视告警阈值
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={0.01}
+                                  value={s.perspective_threshold}
+                                  onChange={(e) =>
+                                    updateSkill(s.key, {
+                                      perspective_threshold: Number(e.target.value),
+                                    })
+                                  }
+                                />
+                              </label>
+                            )}
+                            <label>
+                              连续确认次数
+                              <input
+                                type="number"
+                                min={1}
+                                value={s.confirm_count}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    confirm_count: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              告警冷却（秒）
+                              <input
+                                type="number"
+                                min={0}
+                                value={s.cooldown_sec}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    cooldown_sec: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              SSIM 跳过阈值
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                value={s.ssim_skip_threshold}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    ssim_skip_threshold: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                          </>
+                        )}
                         {skillSupportsTracking(skills, s.skill_name) && (
                           <label>
                             启用跟踪

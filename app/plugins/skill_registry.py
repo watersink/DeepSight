@@ -3,6 +3,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Type
 
 from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
+from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
+from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
 from app.plugins.skills.non_fixed_parking_boarding_detector_skill import (
     NonFixedParkingBoardingDetectorSkill,
 )
@@ -30,6 +32,8 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     NonFixedParkingBoardingDetectorSkill.DEFAULT_CONFIG["name"]: (
         NonFixedParkingBoardingDetectorSkill
     ),
+    CameraShiftDetectorSkill.DEFAULT_CONFIG["name"]: CameraShiftDetectorSkill,
+    CameraTiltDetectorSkill.DEFAULT_CONFIG["name"]: CameraTiltDetectorSkill,
 }
 
 
@@ -61,6 +65,18 @@ _PARAM_LABELS: Dict[str, str] = {
     "helmet_min_ratio": "安全帽最小占比",
     "roi_hold": "区域保持帧数",
     "door_expand": "车门区域扩展比例",
+    "reference_image_url": "校准模板图片地址",
+    "check_interval_sec": "检测间隔（秒）",
+    "shift_threshold_px": "平移告警阈值（像素）",
+    "tilt_threshold_deg": "转角告警阈值（度）",
+    "perspective_threshold": "透视告警阈值",
+    "confirm_count": "连续确认次数",
+    "cooldown_sec": "告警冷却（秒）",
+    "ssim_skip_threshold": "SSIM 跳过阈值",
+    "ssim_fail_threshold": "SSIM 失效阈值",
+    "min_match_count": "最少匹配点数",
+    "min_inlier_ratio": "最低内点比例",
+    "max_side": "处理最长边",
 }
 
 _SKIP_PARAM_KEYS = {
@@ -182,6 +198,19 @@ def skill_param_items(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     return items
 
 
+def get_skill_run_mode(skill_name: str) -> str:
+    """stream=实时视频；snapshot=周期截图。缺省 stream。"""
+    cls = _SKILL_CLASSES.get(skill_name)
+    if cls is None:
+        return "stream"
+    mode = str((cls.DEFAULT_CONFIG or {}).get("run_mode") or "stream").strip().lower()
+    return mode if mode in {"stream", "snapshot"} else "stream"
+
+
+def is_snapshot_skill(skill_name: str) -> bool:
+    return get_skill_run_mode(skill_name) == "snapshot"
+
+
 def list_available_skills() -> List[Dict[str, Any]]:
     """返回可选择的技能列表（去重）"""
     seen = set()
@@ -192,11 +221,15 @@ def list_available_skills() -> List[Dict[str, Any]]:
             continue
         seen.add(key)
         cfg = cls.DEFAULT_CONFIG
+        tracking_fields = tracking_form_fields(cfg.get("params"))
+        if str(cfg.get("run_mode") or "stream").strip().lower() == "snapshot":
+            tracking_fields = []
         result.append({
             "skill_name": cfg.get("name"),
             "name_zh": cfg.get("name_zh"),
             "description": cfg.get("description"),
             "type": cfg.get("type"),
+            "run_mode": str(cfg.get("run_mode") or "stream"),
             "version": cfg.get("version"),
             "required_models": cfg.get("required_models", []),
             "cover_image": cfg.get("cover_image")
@@ -204,7 +237,7 @@ def list_available_skills() -> List[Dict[str, Any]]:
             # 任务配置表单按此声明渲染；未声明则不展示计数/画线等专用项
             "form_fields": _merge_form_fields(
                 cfg.get("form_fields") or [],
-                tracking_form_fields(cfg.get("params")),
+                tracking_fields,
             ),
             "params": skill_param_items(cfg),
             "alert_definitions": cfg.get("alert_definitions") or [],

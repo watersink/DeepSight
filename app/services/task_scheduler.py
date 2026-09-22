@@ -135,6 +135,12 @@ def _runtime_alive(row: TaskConfig) -> bool:
     tid = row.last_runtime_task_id
     if not tid:
         return False
+    runtime_id = str(tid)
+    if runtime_id.startswith("snap:"):
+        from app.services.snapshot_patrol import snapshot_patrol
+
+        return snapshot_patrol.is_running(row.id)
+
     worker_id = getattr(row, "worker_id", None)
     try:
         data = runtime_gateway.get_task(tid, worker_id=worker_id)

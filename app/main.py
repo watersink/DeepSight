@@ -28,6 +28,7 @@ from app.api.routes.mgmt import router as mgmt_router
 from app.api.routes.open_api import router as open_api_router
 from app.api.routes.platform_settings import router as platform_settings_router
 from app.api.routes.alert_levels import router as alert_levels_router
+from app.api.routes.llm import router as llm_router
 from app.api.routes.skills import router as skills_router
 from app.api.routes.streams import router as streams_router
 from app.api.routes.workers import router as workers_router
@@ -296,6 +297,7 @@ app.include_router(clip_router, prefix=settings.API_V1_STR)
 app.include_router(mgmt_router, prefix=settings.API_V1_STR)
 app.include_router(platform_settings_router, prefix=settings.API_V1_STR)
 app.include_router(alert_levels_router, prefix=settings.API_V1_STR)
+app.include_router(llm_router, prefix=settings.API_V1_STR)
 app.include_router(open_api_router)
 
 _DIST = settings.frontend_dist_path

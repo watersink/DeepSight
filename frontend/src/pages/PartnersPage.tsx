@@ -11,6 +11,8 @@ const TYPE_OPTIONS = [
   { value: "05", label: "05 非常规通道出井" },
   { value: "06", label: "06 入井闸机出闸" },
   { value: "07", label: "07 出井闸机入闸" },
+  { value: "08", label: "08 摄像头位置挪移" },
+  { value: "09", label: "09 摄像头角度偏离" },
 ];
 
 const emptyForm = {

@@ -92,6 +92,10 @@ class SkillInfoResponse(BaseModel):
     name_zh: Optional[str] = Field(default=None, description="技能中文名称")
     description: Optional[str] = Field(default=None, description="技能功能描述")
     type: Optional[str] = Field(default=None, description="技能类型，如 detection")
+    run_mode: str = Field(
+        default="stream",
+        description="运行模式：stream=实时视频；snapshot=周期截图",
+    )
     version: Optional[str] = Field(default=None, description="技能版本")
     required_models: List[str] = Field(
         default_factory=list,

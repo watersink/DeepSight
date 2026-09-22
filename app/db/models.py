@@ -6,6 +6,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -271,6 +272,34 @@ class AlertLevelConfig(Base):
     # 1 严重 / 2 警告 / 3 提示
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class LlmSettings(Base):
+    """大模型助手配置（多行）。兼容 OpenAI Chat Completions。"""
+
+    __tablename__ = "mgmt_llm_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    base_url: Mapped[str] = mapped_column(
+        String(512), default="https://api.deepseek.com/v1", nullable=False
+    )
+    api_key: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(128), default="deepseek-chat", nullable=False)
+    temperature: Mapped[float] = mapped_column(Float, default=0.7, nullable=False)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=2048, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(
+        Text,
+        default=(
+            "你是 DeepSight 视频监控平台的智能助手，帮助用户理解告警、事件与系统使用。"
+            "回答简洁、准确。"
+        ),
+        nullable=False,
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
