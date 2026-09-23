@@ -166,6 +166,39 @@ class Settings(BaseSettings):
         description="默认摄像仪编码（20位）；可被推流请求 camera_code 覆盖",
     )
 
+    # 煤安平台 OAuth2 客户端凭证（获取 client_token）
+    COAL_OAUTH_TOKEN_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/oauth2/client_token",
+        description="煤安平台获取 client_token 的接口地址",
+    )
+    COAL_OAUTH_CLIENT_ID: str = Field(
+        default="",
+        description="煤安平台 OAuth2 client_id",
+    )
+    COAL_OAUTH_CLIENT_SECRET: str = Field(
+        default="",
+        description="煤安平台 OAuth2 client_secret",
+    )
+    COAL_OAUTH_SCOPE: str = Field(
+        default="mine",
+        description="煤安平台 OAuth2 scope（固定 mine）",
+    )
+    COAL_OAUTH_TIMEOUT: float = Field(
+        default=10.0,
+        ge=1.0,
+        description="获取 client_token 接口超时（秒）",
+    )
+    COAL_OAUTH_TOKEN_TTL_SECONDS: int = Field(
+        default=3600,
+        ge=10,
+        description="client_token 本地缓存时长（秒）",
+    )
+    COAL_OAUTH_TOKEN_REFRESH_MARGIN: int = Field(
+        default=5,
+        ge=1,
+        description="client_token 本地缓存提前刷新余量（秒）",
+    )
+
     # 本项目自用 RabbitMQ（Webhook 投递削峰）
     RABBITMQ_HOST: str = Field(default="10.1.3.21", description="本项目 RabbitMQ 主机")
     RABBITMQ_PORT: int = Field(default=5672, description="本项目 RabbitMQ AMQP 端口")
