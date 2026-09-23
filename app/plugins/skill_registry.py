@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
 from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
+from app.plugins.skills.guoan_detector_skill import GuoanDetectorSkill
 from app.plugins.skills.non_fixed_parking_boarding_detector_skill import (
     NonFixedParkingBoardingDetectorSkill,
 )
@@ -34,6 +35,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     ),
     CameraShiftDetectorSkill.DEFAULT_CONFIG["name"]: CameraShiftDetectorSkill,
     CameraTiltDetectorSkill.DEFAULT_CONFIG["name"]: CameraTiltDetectorSkill,
+    GuoanDetectorSkill.DEFAULT_CONFIG["name"]: GuoanDetectorSkill,
 }
 
 
@@ -77,6 +79,21 @@ _PARAM_LABELS: Dict[str, str] = {
     "min_match_count": "最少匹配点数",
     "min_inlier_ratio": "最低内点比例",
     "max_side": "处理最长边",
+    "roi": "检测 ROI",
+    "dark_pixel_threshold": "暗像素阈值",
+    "clip_threshold": "裁剪阈值",
+    "median_drop_ratio": "中位数下降比例",
+    "min_median_drop_abs": "中位数最小下降",
+    "dark_ratio_rise": "暗像素比上升",
+    "block_drop_ratio": "分块下降比例",
+    "block_darken_fraction": "变暗分块占比",
+    "ignore_block_mean": "忽略分块均值",
+    "consecutive_seconds": "连续过暗秒数",
+    "exposure_drop_ratio": "曝光下降比例",
+    "well_exposed_drop": "正常曝光下降",
+    "calibrate_frames": "自动标定帧数",
+    "sample_fps": "采样帧率",
+    "baseline_path": "基准文件路径",
 }
 
 _SKIP_PARAM_KEYS = {
@@ -91,6 +108,8 @@ _SKIP_PARAM_KEYS = {
     "enable_timing_log",
     "mine_code",
     "camera_code",
+    "baseline",
+    "single_frame_as_final",
 }
 
 _LINE_PARAM_KEYS = {"count_line", "bypass_line"}
