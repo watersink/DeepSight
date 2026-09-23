@@ -6,6 +6,9 @@ __pycache__/
 dist/
 frontend/dist/
 
+# 环境变量（含密钥，不入库；模板使用 .env.example）
+.env
+
 # Docker 本地环境与卷数据
 docker/**/.env
 # volumes 下除 .gitkeep 外一律不入库（含 mysql/redis/minio/zlm/triton 等）
