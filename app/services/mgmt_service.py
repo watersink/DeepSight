@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-09 报警；01/02 与画面人数等为事件
-ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07", "08", "09"})
+# 识别类型归类：04-09 报警；dark 过暗；01/02 与画面人数等为事件
+ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07", "08", "09", "dark"})
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
 
@@ -904,11 +904,23 @@ def delete_algorithm(db: Session, row: AlgorithmConfig) -> None:
 # ---------- task configs ----------
 
 def _validate_worker_id(worker_id: Optional[str]) -> str:
-    wid = (worker_id or "").strip() or (settings.DEFAULT_WORKER_ID or "local")
-    known = {n.id for n in list_worker_nodes()}
-    if wid not in known:
-        raise ValueError(f"未知 Worker: {wid}，可选: {', '.join(sorted(known))}")
-    return wid
+    nodes = list_worker_nodes()
+    known = {n.id for n in nodes}
+    wid = (worker_id or "").strip() or (settings.DEFAULT_WORKER_ID or "").strip()
+    if wid in known:
+        return wid
+    # 本机节点历史上用过 local / localw，配置切换后互相兼容
+    aliases = {"local", "localw"}
+    if wid in aliases or not wid:
+        fallback = (settings.DEFAULT_WORKER_ID or "").strip()
+        if fallback in known:
+            return fallback
+        for n in nodes:
+            if n.id in aliases or n.is_local:
+                return n.id
+        if nodes:
+            return nodes[0].id
+    raise ValueError(f"未知 Worker: {wid}，可选: {', '.join(sorted(known))}")
 
 
 def _enrich_task(row: TaskConfig) -> dict:
@@ -1131,7 +1143,7 @@ def start_task_config(db: Session, row: TaskConfig) -> dict:
             raise ValueError("请先配置校准模板图片地址")
         runtime = snapshot_patrol.start(row.id)
         row.last_runtime_task_id = runtime["task_id"]
-        row.worker_id = "local"
+        row.worker_id = _validate_worker_id(getattr(row, "worker_id", None))
         db.commit()
         refreshed = get_task(db, row.id)
         return _enrich_task(refreshed)
@@ -1332,6 +1344,9 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
         and (
             bool(event.get("has_bypass_violation"))
             or bool(event.get("has_count_exit_violation"))
+            or bool(event.get("has_dark_alarm"))
+            or bool(event.get("has_camera_shift"))
+            or bool(event.get("has_camera_tilt"))
         )
     ):
         _persist_one(category="alert", recognition_types=types, uid_suffix="alert")
