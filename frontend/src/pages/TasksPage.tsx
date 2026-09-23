@@ -291,6 +291,7 @@ export default function TasksPage() {
   const [msg, setMsg] = useState("");
   const [playing, setPlaying] = useState<any | null>(null);
   const [drawTarget, setDrawTarget] = useState<DrawTarget | null>(null);
+  const [uploadingRefKey, setUploadingRefKey] = useState<string | null>(null);
 
   const algoById = useMemo(() => {
     const map = new Map<number, any>();
@@ -399,6 +400,22 @@ export default function TasksPage() {
       ...f,
       skills: f.skills.map((s) => (s.key === key ? { ...s, ...patch } : s)),
     }));
+  };
+
+  const uploadReferenceImage = async (skillKey: string, file: File | null) => {
+    if (!file) return;
+    setUploadingRefKey(skillKey);
+    setError("");
+    try {
+      const res = await api.uploadCalibrationImage(file);
+      if (!res?.url) throw new Error("上传成功但未返回地址");
+      updateSkill(skillKey, { reference_image_url: res.url });
+      setMsg("校准模板已上传");
+    } catch (err: any) {
+      setError(err.message || String(err));
+    } finally {
+      setUploadingRefKey(null);
+    }
   };
 
   const addSkill = () => {
@@ -1283,19 +1300,70 @@ export default function TasksPage() {
                         </label>
                         {mode === "snapshot" && (
                           <>
-                            <label className="full">
-                              校准模板图片地址 *
-                              <input
-                                required
-                                value={s.reference_image_url}
-                                onChange={(e) =>
-                                  updateSkill(s.key, {
-                                    reference_image_url: e.target.value,
-                                  })
-                                }
-                                placeholder="https://... 或服务器本地路径"
-                              />
-                            </label>
+                            <div className="form-field full">
+                              校准模板图片 *
+                              <div className="ref-image-row">
+                                <input
+                                  required
+                                  value={s.reference_image_url}
+                                  onChange={(e) =>
+                                    updateSkill(s.key, {
+                                      reference_image_url: e.target.value,
+                                    })
+                                  }
+                                  placeholder="填写图片 URL / 服务器路径，或右侧上传本地图片"
+                                />
+                                <label
+                                  className={`btn ${
+                                    uploadingRefKey === s.key ? "" : "primary"
+                                  }`}
+                                  style={{
+                                    margin: 0,
+                                    whiteSpace: "nowrap",
+                                    cursor:
+                                      uploadingRefKey === s.key
+                                        ? "not-allowed"
+                                        : "pointer",
+                                    opacity: uploadingRefKey === s.key ? 0.7 : 1,
+                                  }}
+                                >
+                                  {uploadingRefKey === s.key
+                                    ? "上传中…"
+                                    : "上传图片"}
+                                  <input
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp,image/bmp"
+                                    hidden
+                                    disabled={uploadingRefKey === s.key}
+                                    onChange={(e) => {
+                                      const f = e.target.files?.[0] || null;
+                                      e.target.value = "";
+                                      void uploadReferenceImage(s.key, f);
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                              {!!s.reference_image_url.trim() &&
+                                /^https?:\/\//i.test(s.reference_image_url.trim()) && (
+                                  <div className="ref-image-preview">
+                                    <img
+                                      src={s.reference_image_url.trim()}
+                                      alt="校准模板预览"
+                                      onError={(e) => {
+                                        (
+                                          e.currentTarget as HTMLImageElement
+                                        ).style.display = "none";
+                                      }}
+                                    />
+                                  </div>
+                                )}
+                              <span
+                                className="muted"
+                                style={{ marginTop: 0, fontSize: 12 }}
+                              >
+                                支持直接填写地址，或上传本地 png / jpg / webp / bmp（≤8MB）
+                              </span>
+                            </div>
                             <label>
                               检测间隔（秒） *
                               <input

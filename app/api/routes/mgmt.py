@@ -3,8 +3,9 @@ import logging
 from datetime import datetime
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.mgmt_schemas import (
@@ -65,6 +66,36 @@ router = APIRouter(
 
 def _meta(page: int, page_size: int, total: int) -> PageMeta:
     return PageMeta(total=total, page=page, page_size=page_size)
+
+
+class CalibrationImageUploadOut(BaseModel):
+    url: str = Field(description="校准模板可访问地址（写入任务配置）")
+    object_name: str = Field(description="对象存储路径")
+
+
+@router.post(
+    "/uploads/calibration-image",
+    response_model=CalibrationImageUploadOut,
+    summary="上传校准模板图片",
+    description="供周期截图类技能配置校准模板：上传后返回 URL，可写入 reference_image_url。",
+)
+async def upload_calibration_image(
+    file: UploadFile = File(...),
+):
+    data = await file.read()
+    try:
+        result = svc.upload_calibration_image(
+            data, file.content_type or "application/octet-stream"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("校准模板上传失败")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"校准模板上传失败: {e}",
+        ) from e
+    return CalibrationImageUploadOut(**result)
 
 
 @router.get("/models", response_model=TritonModelListResponse, summary="Triton 模型列表")

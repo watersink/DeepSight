@@ -31,10 +31,36 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-08 报警；01/02 与画面人数等为事件
+# 识别类型归类：04-09 报警；01/02 与画面人数等为事件
 ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07", "08", "09"})
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
+
+_CALIBRATION_IMAGE_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+}
+
+
+def upload_calibration_image(data: bytes, content_type: str) -> Dict[str, str]:
+    """上传校准模板图到 MinIO，返回可持久化的 URL。"""
+    from app.services.minio_client import minio_storage
+
+    ct = (content_type or "image/jpeg").split(";")[0].strip().lower()
+    if ct not in _CALIBRATION_IMAGE_TYPES:
+        raise ValueError("仅支持 png / jpg / webp / bmp 图片")
+    if not data:
+        raise ValueError("空文件")
+    if len(data) > 8 * 1024 * 1024:
+        raise ValueError("校准模板图片不能超过 8MB")
+
+    ext = _CALIBRATION_IMAGE_TYPES[ct]
+    object_name = f"calibration/{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex}{ext}"
+    url = minio_storage.upload_bytes(data, object_name, ct)
+    return {"url": url, "object_name": object_name}
 
 
 def classify_record_category(

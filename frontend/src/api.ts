@@ -130,6 +130,15 @@ export const api = {
 
   getSkills: () => request<{ skills: any[] }>("/api/v1/skills"),
 
+  uploadCalibrationImage: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ url: string; object_name: string }>(
+      "/api/v1/uploads/calibration-image",
+      { method: "POST", body: fd }
+    );
+  },
+
   getModels: () =>
     request<{
       server_url: string;
