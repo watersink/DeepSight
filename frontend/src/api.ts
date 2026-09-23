@@ -88,6 +88,7 @@ export const api = {
     request(`/api/v1/users/${id}`, { method: "DELETE" }),
 
   getCameras: () => request<{ items: any[]; meta: PageMeta }>("/api/v1/cameras"),
+  getCamera: (id: number) => request<any>(`/api/v1/cameras/${id}`),
   getCameraTree: () =>
     request<{ mines: any[]; unassigned: any[] }>("/api/v1/camera-tree"),
   createCamera: (body: object) =>

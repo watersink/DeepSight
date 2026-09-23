@@ -76,8 +76,47 @@ class CameraCreate(BaseModel):
     zlm_app: str = Field(default="", max_length=64)
     zlm_stream: str = Field(default="", max_length=128)
     site_id: Optional[int] = None
-    camera_code: str = Field(default="", max_length=32)
-    mine_code: str = Field(default="", max_length=16)
+    camera_code: str = Field(
+        ...,
+        min_length=1,
+        max_length=32,
+        description="摄像仪编码（参照 MT/T 1201.6-2023）",
+    )
+    mine_code: str = Field(
+        default="",
+        max_length=16,
+        description="煤矿编码，12 位数字；不传时取服务端默认 COUNTING_RECOG_MINE_CODE",
+    )
+    position_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=32,
+        description="摄像仪安装位置分类编码（参照 MT/T 1201.6-2023）",
+    )
+    position_desc: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="摄像仪具体安装位置描述",
+    )
+    ps_station_code: str = Field(
+        default="",
+        max_length=32,
+        description="站点编码（关联人员定位分站编码）",
+    )
+    analysis_type: Literal["01", "02"] = Field(
+        ...,
+        description="分析类型：01=人员计数（入），02=人员计数（出）",
+    )
+    data_time: str = Field(
+        default="",
+        max_length=32,
+        description="数据生成时间 yyyy-MM-dd HH:mm:ss；空则服务端自动填充",
+    )
+    basic_image_base64: Optional[str] = Field(
+        default=None,
+        description="基准图片 Base64；空则保存后自动 ZLM 截图填充",
+    )
     enabled: bool = True
     remark: str = Field(default="", max_length=255)
 
@@ -90,8 +129,14 @@ class CameraUpdate(BaseModel):
     zlm_app: Optional[str] = Field(default=None, max_length=64)
     zlm_stream: Optional[str] = Field(default=None, max_length=128)
     site_id: Optional[int] = None
-    camera_code: Optional[str] = Field(default=None, max_length=32)
+    camera_code: Optional[str] = Field(default=None, min_length=1, max_length=32)
     mine_code: Optional[str] = Field(default=None, max_length=16)
+    position_type: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    position_desc: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    ps_station_code: Optional[str] = Field(default=None, max_length=32)
+    analysis_type: Optional[Literal["01", "02"]] = None
+    data_time: Optional[str] = Field(default=None, max_length=32)
+    basic_image_base64: Optional[str] = None
     enabled: Optional[bool] = None
     remark: Optional[str] = Field(default=None, max_length=255)
 
@@ -109,6 +154,14 @@ class CameraOut(BaseModel):
     proxy_key: Optional[str] = None
     camera_code: str
     mine_code: str
+    position_type: str = ""
+    position_desc: str = ""
+    ps_station_code: str = ""
+    analysis_type: str = ""
+    data_time: str = ""
+    has_basic_image: bool = False
+    # 列表/树默认不回传大图；详情接口会带上
+    basic_image_base64: Optional[str] = None
     site_id: Optional[int] = None
     site_name: Optional[str] = None
     mine_id: Optional[int] = None

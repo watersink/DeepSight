@@ -1,6 +1,7 @@
 """管理台业务服务"""
 from __future__ import annotations
 
+import base64
 import logging
 import re
 import uuid
@@ -98,9 +99,16 @@ def _page(items: list, total: int, page: int, page_size: int) -> Tuple[list, dic
     return items, {"total": total, "page": page, "page_size": page_size}
 
 
-def _camera_to_dict(row: Camera, *, online_keys=None, zlm_error: Optional[str] = None) -> dict:
+def _camera_to_dict(
+    row: Camera,
+    *,
+    online_keys=None,
+    zlm_error: Optional[str] = None,
+    include_basic_image: bool = False,
+) -> dict:
     site = getattr(row, "site", None)
     mine = getattr(site, "mine", None) if site is not None else None
+    basic_b64 = str(getattr(row, "basic_image_base64", None) or "").strip()
     data = {
         "id": row.id,
         "name": row.name,
@@ -112,6 +120,13 @@ def _camera_to_dict(row: Camera, *, online_keys=None, zlm_error: Optional[str] =
         "proxy_key": getattr(row, "proxy_key", None),
         "camera_code": row.camera_code,
         "mine_code": row.mine_code,
+        "position_type": getattr(row, "position_type", None) or "",
+        "position_desc": getattr(row, "position_desc", None) or "",
+        "ps_station_code": getattr(row, "ps_station_code", None) or "",
+        "analysis_type": getattr(row, "analysis_type", None) or "",
+        "data_time": getattr(row, "data_time", None) or "",
+        "has_basic_image": bool(basic_b64),
+        "basic_image_base64": basic_b64 if include_basic_image else None,
         "site_id": row.site_id,
         "site_name": site.name if site is not None else None,
         "mine_id": mine.id if mine is not None else None,
@@ -149,6 +164,85 @@ def _camera_to_dict(row: Camera, *, online_keys=None, zlm_error: Optional[str] =
     key = zlm_client.media_key(app, stream)
     data["online"] = key in online_keys
     return data
+
+
+def _normalize_basic_image_base64(raw: Optional[str]) -> Optional[str]:
+    """规范化基准图：保留 dataURL 前缀；纯 Base64 则补 jpeg 前缀。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.startswith("data:image/"):
+        return text
+    return f"data:image/jpeg;base64,{text}"
+
+
+def _normalize_camera_mt_fields(data: dict, *, for_create: bool = False) -> dict:
+    """补齐 MT/T 字段默认值与校验。"""
+    out = dict(data)
+    if "camera_code" in out:
+        out["camera_code"] = str(out.get("camera_code") or "").strip()
+        if for_create and not out["camera_code"]:
+            raise ValueError("摄像仪编码 camera_code 必填")
+    if "position_type" in out:
+        out["position_type"] = str(out.get("position_type") or "").strip()
+        if for_create and not out["position_type"]:
+            raise ValueError("安装位置分类编码 position_type 必填")
+    if "position_desc" in out:
+        out["position_desc"] = str(out.get("position_desc") or "").strip()
+        if for_create and not out["position_desc"]:
+            raise ValueError("安装位置描述 position_desc 必填")
+    if "ps_station_code" in out:
+        out["ps_station_code"] = str(out.get("ps_station_code") or "").strip()
+    if "analysis_type" in out:
+        at = str(out.get("analysis_type") or "").strip()
+        if for_create and not at:
+            raise ValueError("分析类型 analysis_type 必填（01/02）")
+        if at and at not in {"01", "02"}:
+            raise ValueError("analysis_type 仅支持 01（入）/ 02（出）")
+        out["analysis_type"] = at
+    if "data_time" in out or for_create:
+        dt = str(out.get("data_time") or "").strip()
+        if not dt:
+            dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out["data_time"] = dt
+    if "mine_code" in out or for_create:
+        mc = str(out.get("mine_code") or "").strip()
+        if not mc:
+            mc = str(settings.COUNTING_RECOG_MINE_CODE or "").strip()
+        if mc and (not mc.isdigit() or len(mc) != 12):
+            # 不强制拦截历史/外部编码，仅提示日志
+            logger.warning("煤矿编码非 12 位数字 mine_code=%r", mc)
+        out["mine_code"] = mc
+    if "basic_image_base64" in out:
+        out["basic_image_base64"] = _normalize_basic_image_base64(
+            out.get("basic_image_base64")
+        )
+    return out
+
+
+def _capture_basic_image_after_save(db: Session, row: Camera) -> Camera:
+    """配置完成后调用 ZLM getSnap，写入基准模板图。失败仅告警不回滚摄像头配置。"""
+    try:
+        candidates = resolve_camera_snap_urls(db, row)
+        jpeg = zlm_client.get_snap_prefer_zlm(candidates)
+        b64 = base64.b64encode(jpeg).decode("ascii")
+        row.basic_image_base64 = f"data:image/jpeg;base64,{b64}"
+        if not str(row.data_time or "").strip():
+            row.data_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.commit()
+        db.refresh(row)
+        logger.info(
+            "摄像头模板已自动截取 camera_id=%s bytes=%s",
+            row.id,
+            len(jpeg),
+        )
+    except Exception as e:
+        logger.warning(
+            "摄像头配置后自动截取模板失败 camera_id=%s: %s",
+            getattr(row, "id", None),
+            e,
+        )
+    return row
 
 
 def _sync_camera_mine_code(db: Session, data: dict) -> dict:
@@ -404,7 +498,7 @@ def list_cameras(
     return _page(items, int(total), page, page_size)
 
 
-def enrich_camera(row: Camera) -> dict:
+def enrich_camera(row: Camera, *, include_basic_image: bool = True) -> dict:
     """单条摄像头附带在线状态。"""
     import logging
 
@@ -420,7 +514,12 @@ def enrich_camera(row: Camera) -> dict:
     except Exception as e:
         zlm_error = str(e)
         logger.warning("查询 ZLM 在线流失败: %s", e)
-    return _camera_to_dict(row, online_keys=online_keys, zlm_error=zlm_error)
+    return _camera_to_dict(
+        row,
+        online_keys=online_keys,
+        zlm_error=zlm_error,
+        include_basic_image=include_basic_image,
+    )
 
 
 def _default_zlm_stream_id(data: dict) -> str:
@@ -623,6 +722,8 @@ def _prepare_camera_stream_fields(
 
 def create_camera(db: Session, data: dict) -> Camera:
     data = _sync_camera_mine_code(db, dict(data))
+    data = _normalize_camera_mt_fields(data, for_create=True)
+    provided_img = bool(str(data.get("basic_image_base64") or "").strip())
     data = _prepare_camera_stream_fields(data)
     # 仅保留模型字段
     allowed = {
@@ -635,6 +736,12 @@ def create_camera(db: Session, data: dict) -> Camera:
         "proxy_key",
         "camera_code",
         "mine_code",
+        "position_type",
+        "position_desc",
+        "ps_station_code",
+        "analysis_type",
+        "data_time",
+        "basic_image_base64",
         "site_id",
         "enabled",
         "remark",
@@ -644,7 +751,17 @@ def create_camera(db: Session, data: dict) -> Camera:
     db.add(row)
     db.commit()
     db.refresh(row)
+    if not provided_img:
+        row = _capture_basic_image_after_save(db, row)
     cache_delete(CACHE_CAMERAS)
+    try:
+        from app.services.coal_camera_push import push_camera_config
+
+        push_camera_config(row)
+    except Exception:
+        logger.exception(
+            "摄像仪配置推送调用异常 camera_id=%s", getattr(row, "id", None)
+        )
     return row
 
 
@@ -658,6 +775,10 @@ def get_camera(db: Session, camera_id: int) -> Optional[Camera]:
 
 def update_camera(db: Session, row: Camera, data: dict) -> Camera:
     data = _sync_camera_mine_code(db, dict(data))
+    data = _normalize_camera_mt_fields(data, for_create=False)
+    provided_img = "basic_image_base64" in data and bool(
+        str(data.get("basic_image_base64") or "").strip()
+    )
     # 若涉及取流相关字段，重新规范化
     stream_keys = {
         "ingest_mode",
@@ -668,7 +789,8 @@ def update_camera(db: Session, row: Camera, data: dict) -> Camera:
         "camera_code",
         "name",
     }
-    if stream_keys.intersection(data.keys()):
+    stream_changed = bool(stream_keys.intersection(data.keys()))
+    if stream_changed:
         merged = {
             "ingest_mode": data.get("ingest_mode", row.ingest_mode),
             "in_url": data.get("in_url", row.in_url),
@@ -690,11 +812,29 @@ def update_camera(db: Session, row: Camera, data: dict) -> Camera:
             data[k] = prepared.get(k)
 
     for k, v in data.items():
-        if v is not None or k in {"site_id", "source_url", "proxy_key"}:
+        if v is not None or k in {
+            "site_id",
+            "source_url",
+            "proxy_key",
+            "basic_image_base64",
+        }:
             setattr(row, k, v)
     db.commit()
     db.refresh(row)
+    # 未手动传模板时：无模板或流地址变更 → 自动 getSnap
+    if not provided_img and (
+        stream_changed or not str(getattr(row, "basic_image_base64", None) or "").strip()
+    ):
+        row = _capture_basic_image_after_save(db, row)
     cache_delete(CACHE_CAMERAS)
+    try:
+        from app.services.coal_camera_push import push_camera_config
+
+        push_camera_config(row)
+    except Exception:
+        logger.exception(
+            "摄像仪配置推送调用异常 camera_id=%s", getattr(row, "id", None)
+        )
     return row
 
 

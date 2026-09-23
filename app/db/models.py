@@ -97,6 +97,16 @@ class Camera(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     camera_code: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     mine_code: Mapped[str] = mapped_column(String(16), default="", nullable=False)
+    # MT/T 1201.6-2023 相关字段
+    position_type: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    position_desc: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    ps_station_code: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    # 01=人员计数（入），02=人员计数（出）
+    analysis_type: Mapped[str] = mapped_column(String(8), default="", nullable=False)
+    # yyyy-MM-dd HH:mm:ss
+    data_time: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    # 基准/模板图片 Base64（可含 data:image/...;base64, 前缀）
+    basic_image_base64: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 归属地点；历史数据可为空，未挂树
     site_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("mgmt_sites.id", ondelete="SET NULL"), nullable=True, index=True

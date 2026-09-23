@@ -61,12 +61,14 @@ function FormDialog({
   onSubmit,
   children,
   submitText,
+  width,
 }: {
   title: string;
   onClose: () => void;
   onSubmit: (e: FormEvent) => void;
   children: ReactNode;
   submitText: string;
+  width?: string;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -80,7 +82,7 @@ function FormDialog({
     <div className="modal-backdrop" onClick={onClose} role="presentation">
       <div
         className="modal-panel"
-        style={{ width: "min(560px, 100%)" }}
+        style={{ width: width || "min(560px, 100%)" }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -106,6 +108,40 @@ function FormDialog({
     </div>
   );
 }
+
+function formatDataTime(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
+    d.getHours()
+  )}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function analysisTypeLabel(code: string): string {
+  if (code === "01") return "01 人员计数（入）";
+  if (code === "02") return "02 人员计数（出）";
+  return code || "—";
+}
+
+const emptyCamDraft = () => ({
+  name: "",
+  ingest_mode: "push" as "push" | "proxy",
+  in_url: "",
+  source_url: "",
+  zlm_app: "",
+  zlm_stream: "",
+  camera_code: "",
+  mine_code: "",
+  position_type: "",
+  position_desc: "",
+  ps_station_code: "",
+  analysis_type: "01" as "01" | "02",
+  data_time: formatDataTime(),
+  basic_image_base64: "",
+  has_basic_image: false,
+  site_id: null as number | null,
+  enabled: true,
+  remark: "",
+});
 
 export default function CamerasPage() {
   const [tree, setTree] = useState<{ mines: any[]; unassigned: any[] }>({
@@ -135,20 +171,7 @@ export default function CamerasPage() {
     remark: "",
     enabled: true,
   });
-  const [camDraft, setCamDraft] = useState({
-    name: "",
-    ingest_mode: "push" as "push" | "proxy",
-    in_url: "",
-    source_url: "",
-    zlm_app: "",
-    zlm_stream: "",
-    camera_code: "",
-    mine_code: "",
-    site_id: null as number | null,
-    enabled: true,
-    remark: "",
-  });
-
+  const [camDraft, setCamDraft] = useState(emptyCamDraft);
   const load = async () => {
     setLoading(true);
     setError("");
@@ -263,33 +286,50 @@ export default function CamerasPage() {
     setCtx(null);
   };
 
-  const openCameraDialog = (
+  const openCameraDialog = async (
     mode: "create" | "edit",
     opts?: { siteId?: number | null; camera?: any }
   ) => {
     const camera = opts?.camera;
+    let detail = camera;
+    if (mode === "edit" && camera?.id) {
+      try {
+        detail = await api.getCamera(camera.id);
+      } catch {
+        detail = camera;
+      }
+    }
     setCamDraft({
-      name: camera?.name || "",
-      ingest_mode:
-        camera?.ingest_mode === "proxy" ? "proxy" : "push",
-      in_url: camera?.in_url || "",
-      source_url: camera?.source_url || "",
-      zlm_app: camera?.zlm_app || "",
-      zlm_stream: camera?.zlm_stream || "",
-      camera_code: camera?.camera_code || "",
-      mine_code: camera?.mine_code || "",
+      name: detail?.name || "",
+      ingest_mode: detail?.ingest_mode === "proxy" ? "proxy" : "push",
+      in_url: detail?.in_url || "",
+      source_url: detail?.source_url || "",
+      zlm_app: detail?.zlm_app || "",
+      zlm_stream: detail?.zlm_stream || "",
+      camera_code: detail?.camera_code || "",
+      mine_code: detail?.mine_code || "",
+      position_type: detail?.position_type || "",
+      position_desc: detail?.position_desc || "",
+      ps_station_code: detail?.ps_station_code || "",
+      analysis_type:
+        detail?.analysis_type === "02" ? "02" : "01",
+      data_time: detail?.data_time || formatDataTime(),
+      basic_image_base64: detail?.basic_image_base64 || "",
+      has_basic_image: !!(
+        detail?.has_basic_image || detail?.basic_image_base64
+      ),
       site_id:
-        camera?.site_id ??
+        detail?.site_id ??
         opts?.siteId ??
         (sel?.type === "site" ? sel.siteId : null),
-      enabled: camera ? !!camera.enabled : true,
-      remark: camera?.remark || "",
+      enabled: detail ? !!detail.enabled : true,
+      remark: detail?.remark || "",
     });
     setDialog({
       type: "camera",
       mode,
-      siteId: opts?.siteId ?? camera?.site_id ?? null,
-      camera,
+      siteId: opts?.siteId ?? detail?.site_id ?? null,
+      camera: detail || camera,
     });
     setCtx(null);
   };
@@ -339,7 +379,19 @@ export default function CamerasPage() {
     if (!dialog || dialog.type !== "camera") return;
     setError("");
     try {
-      const body = {
+      if (!camDraft.camera_code.trim()) {
+        setError("请填写摄像仪编码");
+        return;
+      }
+      if (!camDraft.position_type.trim()) {
+        setError("请填写安装位置分类编码");
+        return;
+      }
+      if (!camDraft.position_desc.trim()) {
+        setError("请填写安装位置描述");
+        return;
+      }
+      const body: Record<string, unknown> = {
         name: camDraft.name,
         ingest_mode: camDraft.ingest_mode,
         in_url: camDraft.in_url,
@@ -349,12 +401,28 @@ export default function CamerasPage() {
             : null,
         zlm_app: camDraft.zlm_app,
         zlm_stream: camDraft.zlm_stream,
-        camera_code: camDraft.camera_code,
-        mine_code: camDraft.mine_code,
+        camera_code: camDraft.camera_code.trim(),
+        mine_code: camDraft.mine_code.trim(),
+        position_type: camDraft.position_type.trim(),
+        position_desc: camDraft.position_desc.trim(),
+        ps_station_code: camDraft.ps_station_code.trim(),
+        analysis_type: camDraft.analysis_type,
+        data_time: camDraft.data_time.trim() || formatDataTime(),
         site_id: camDraft.site_id,
         enabled: camDraft.enabled,
         remark: camDraft.remark,
       };
+      // 仅在用户显式填写/保留了模板时提交；否则由服务端保存后自动 ZLM 截图
+      if (camDraft.basic_image_base64.trim()) {
+        body.basic_image_base64 = camDraft.basic_image_base64.trim();
+      } else if (
+        dialog.mode === "edit" &&
+        dialog.camera?.has_basic_image &&
+        !camDraft.has_basic_image
+      ) {
+        // 用户清除了已有模板 → 通知服务端清空并自动重截
+        body.basic_image_base64 = "";
+      }
       if (dialog.mode === "edit" && dialog.camera) {
         await api.updateCamera(dialog.camera.id, body);
       } else {
@@ -643,9 +711,12 @@ export default function CamerasPage() {
                   <tr>
                     <th>ID</th>
                     <th>名称</th>
-                    <th>位置</th>
+                    <th>摄像仪编码</th>
+                    <th>位置描述</th>
+                    <th>分析类型</th>
                     <th>接入</th>
                     <th>ZLM 流</th>
+                    <th>模板</th>
                     <th>在线</th>
                     <th>启用</th>
                     <th>操作</th>
@@ -665,10 +736,11 @@ export default function CamerasPage() {
                     >
                       <td>{c.id}</td>
                       <td>{c.name}</td>
-                      <td className="muted">
-                        {[c.mine_name, c.site_name].filter(Boolean).join(" / ") ||
-                          "未归类"}
+                      <td className="mono">{c.camera_code || "—"}</td>
+                      <td className="muted" title={c.position_desc || ""}>
+                        {c.position_desc || "—"}
                       </td>
+                      <td>{analysisTypeLabel(c.analysis_type)}</td>
                       <td>
                         <span className="badge">
                           {c.ingest_mode === "proxy" ? "拉流代理" : "推流登记"}
@@ -678,6 +750,15 @@ export default function CamerasPage() {
                         {c.zlm_app && c.zlm_stream
                           ? `${c.zlm_app}/${c.zlm_stream}`
                           : c.in_url || "—"}
+                      </td>
+                      <td>
+                        <span
+                          className={`badge ${
+                            c.has_basic_image ? "run" : "stop"
+                          }`}
+                        >
+                          {c.has_basic_image ? "已截取" : "无"}
+                        </span>
                       </td>
                       <td>
                         <OnlineBadge cam={c} />
@@ -709,7 +790,7 @@ export default function CamerasPage() {
                   ))}
                   {!pagedCameras.length && (
                     <tr>
-                      <td colSpan={8} className="muted">
+                      <td colSpan={11} className="muted">
                         {sel
                           ? "该节点下暂无摄像头（可在地点上右键「新增摄像头」）"
                           : "请在左侧选择煤矿或地点"}
@@ -938,6 +1019,7 @@ export default function CamerasPage() {
           onClose={() => setDialog(null)}
           onSubmit={saveCamera}
           submitText="保存"
+          width="min(760px, 100%)"
         >
           <div className="form-grid">
             <label>
@@ -969,6 +1051,86 @@ export default function CamerasPage() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              摄像仪编码 *
+              <input
+                required
+                placeholder="如 34020000001320000001"
+                value={camDraft.camera_code}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, camera_code: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              煤矿编码（可空）
+              <input
+                placeholder="12 位数字，空则用服务端默认"
+                value={camDraft.mine_code}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, mine_code: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              安装位置分类编码 *
+              <input
+                required
+                placeholder="如 0101（参照 MT/T 1201.6-2023）"
+                value={camDraft.position_type}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, position_type: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              分析类型 *
+              <select
+                required
+                value={camDraft.analysis_type}
+                onChange={(e) =>
+                  setCamDraft({
+                    ...camDraft,
+                    analysis_type: e.target.value as "01" | "02",
+                  })
+                }
+              >
+                <option value="01">01 人员计数（入）</option>
+                <option value="02">02 人员计数（出）</option>
+              </select>
+            </label>
+            <label className="full">
+              安装位置描述 *
+              <input
+                required
+                placeholder="如 副井口入井通道"
+                value={camDraft.position_desc}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, position_desc: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              站点编码（可空）
+              <input
+                placeholder="人员定位分站编码"
+                value={camDraft.ps_station_code}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, ps_station_code: e.target.value })
+                }
+              />
+            </label>
+            <label>
+              数据生成时间 *
+              <input
+                required
+                placeholder="yyyy-MM-dd HH:mm:ss"
+                value={camDraft.data_time}
+                onChange={(e) =>
+                  setCamDraft({ ...camDraft, data_time: e.target.value })
+                }
+              />
             </label>
             <label className="full">
               接入方式
@@ -1038,24 +1200,65 @@ export default function CamerasPage() {
                 平台拉流地址（自动生成）：{camDraft.in_url || "保存后生成"}
               </p>
             )}
-            <label>
-              摄像仪编码
+            <label className="full">
+              基准模板图（可空，保存后自动 ZLM 截图）
               <input
-                value={camDraft.camera_code}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, camera_code: e.target.value })
-                }
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    const result = String(reader.result || "");
+                    setCamDraft({
+                      ...camDraft,
+                      basic_image_base64: result,
+                      has_basic_image: !!result,
+                    });
+                  };
+                  reader.readAsDataURL(file);
+                }}
               />
             </label>
-            <label>
-              煤矿编码（可空）
-              <input
-                value={camDraft.mine_code}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, mine_code: e.target.value })
-                }
-              />
-            </label>
+            {(camDraft.basic_image_base64 || camDraft.has_basic_image) && (
+              <div className="full" style={{ gridColumn: "1 / -1" }}>
+                <p className="muted" style={{ margin: "0 0 8px" }}>
+                  {camDraft.basic_image_base64
+                    ? "当前模板预览（保存时若留空将由服务端自动截取）"
+                    : "已有模板（列表未加载大图；保存且未重传时将按流变更策略刷新）"}
+                </p>
+                {camDraft.basic_image_base64 && (
+                  <img
+                    src={camDraft.basic_image_base64}
+                    alt="基准模板"
+                    style={{
+                      maxWidth: "100%",
+                      maxHeight: 180,
+                      borderRadius: 6,
+                      border: "1px solid var(--border, #ddd)",
+                    }}
+                  />
+                )}
+                {camDraft.basic_image_base64 && (
+                  <div className="toolbar" style={{ marginTop: 8 }}>
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() =>
+                        setCamDraft({
+                          ...camDraft,
+                          basic_image_base64: "",
+                          has_basic_image: false,
+                        })
+                      }
+                    >
+                      清除本地模板（保存后自动截取）
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <label>
               启用
               <select

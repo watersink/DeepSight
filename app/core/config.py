@@ -166,6 +166,21 @@ class Settings(BaseSettings):
         description="默认摄像仪编码（20位）；可被推流请求 camera_code 覆盖",
     )
 
+    # 煤安平台：摄像仪配置推送
+    COAL_CAMERA_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/camera",
+        description="摄像仪配置推送接口地址（创建/更新摄像头后调用）",
+    )
+    COAL_CAMERA_PUSH_TIMEOUT: float = Field(
+        default=15.0,
+        ge=1.0,
+        description="摄像仪配置推送接口超时（秒）",
+    )
+    COAL_CAMERA_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否在摄像头创建/更新后向煤安平台推送配置",
+    )
+
     # 煤安平台 OAuth2 客户端凭证（获取 client_token）
     COAL_OAUTH_TOKEN_URL: str = Field(
         default="http://192.168.26.224:8000/coal/oauth2/client_token",

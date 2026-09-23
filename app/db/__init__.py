@@ -98,6 +98,7 @@ def init_db() -> None:
     _ensure_llm_settings_columns()
     _ensure_camera_tree_schema()
     _ensure_camera_ingest_columns()
+    _ensure_camera_mt_columns()
     _ensure_task_schedule_column()
     _ensure_task_output_option_columns()
     _ensure_task_worker_id_column()
@@ -281,6 +282,54 @@ def _ensure_camera_ingest_columns() -> None:
                 )
         except Exception:
             logger.exception("摄像头 zlm_app/zlm_stream 回填失败（可忽略）")
+
+
+def _ensure_camera_mt_columns() -> None:
+    """补齐 MT/T 1201.6 摄像仪字段：位置分类/描述、分站、分析类型、数据时间、模板图。"""
+    db_name = (settings.MYSQL_DB or "").strip()
+    if not db_name:
+        return
+    with engine.begin() as conn:
+        cam_cols = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA = :db AND TABLE_NAME = 'mgmt_cameras'"
+                ),
+                {"db": db_name},
+            ).fetchall()
+        }
+        if not cam_cols:
+            return
+        alters = []
+        if "position_type" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `position_type` VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "position_desc" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `position_desc` VARCHAR(255) NOT NULL DEFAULT ''"
+            )
+        if "ps_station_code" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `ps_station_code` VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "analysis_type" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `analysis_type` VARCHAR(8) NOT NULL DEFAULT ''"
+            )
+        if "data_time" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `data_time` VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "basic_image_base64" not in cam_cols:
+            alters.append("ADD COLUMN `basic_image_base64` MEDIUMTEXT NULL")
+        if alters:
+            conn.execute(
+                text(f"ALTER TABLE `mgmt_cameras` {', '.join(alters)}")
+            )
+            logger.info("已为 mgmt_cameras 增加 MT/T 字段: %s", alters)
 
 
 def _ensure_mgmt_alerts_columns() -> None:
