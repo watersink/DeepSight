@@ -105,8 +105,10 @@ class Camera(Base):
     analysis_type: Mapped[str] = mapped_column(String(8), default="", nullable=False)
     # yyyy-MM-dd HH:mm:ss
     data_time: Mapped[str] = mapped_column(String(32), default="", nullable=False)
-    # 基准/模板图片 Base64（可含 data:image/...;base64, 前缀）
+    # 基准/模板图片 Base64（可含 data:image/...;base64, 前缀；煤安推送用）
     basic_image_base64: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # 基准/模板图片可访问 URL（MinIO；任务配置 reference_image_url 可自动带入）
+    basic_image_url: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     # 归属地点；历史数据可为空，未挂树
     site_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("mgmt_sites.id", ondelete="SET NULL"), nullable=True, index=True

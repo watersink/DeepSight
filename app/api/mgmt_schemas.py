@@ -115,7 +115,7 @@ class CameraCreate(BaseModel):
     )
     basic_image_base64: Optional[str] = Field(
         default=None,
-        description="基准图片 Base64；空则保存后自动 ZLM 截图填充",
+        description="基准图片 Base64；空则保存后自动 ZLM 截图并上传得到 URL",
     )
     enabled: bool = True
     remark: str = Field(default="", max_length=255)
@@ -160,6 +160,8 @@ class CameraOut(BaseModel):
     analysis_type: str = ""
     data_time: str = ""
     has_basic_image: bool = False
+    # 列表也返回短 URL，便于任务配置自动带入模板
+    basic_image_url: str = ""
     # 列表/树默认不回传大图；详情接口会带上
     basic_image_base64: Optional[str] = None
     site_id: Optional[int] = None

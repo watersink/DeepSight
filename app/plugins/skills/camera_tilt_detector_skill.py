@@ -77,7 +77,7 @@ class CameraTiltDetectorSkill(BaseSkill):
                 "label": "连续确认次数",
                 "type": "number",
                 "required": False,
-                "default": 3,
+                "default": 2,
             },
             {
                 "key": "cooldown_sec",
@@ -307,6 +307,19 @@ class CameraTiltDetectorSkill(BaseSkill):
         except Exception as e:
             logger.exception("角度偏离检测失败")
             return SkillResult.error_result(str(e))
+
+    def _draw_detections_on_frame(
+        self, frame: np.ndarray, alert_data: Dict[str, Any]
+    ) -> np.ndarray:
+        """供实时视频流水线调用：把最近一次角度偏离检测结果画到画面上。"""
+        try:
+            data = alert_data if isinstance(alert_data, dict) else {}
+            if not data and isinstance(self._last_result, dict):
+                data = self._last_result
+            return _draw_tilt_overlay(frame, data)
+        except Exception as e:
+            logger.error("绘制角度偏离检测结果失败: %s", e)
+            return frame
 
 
 def _ascii_only(text: Any, *, fallback: str = "") -> str:

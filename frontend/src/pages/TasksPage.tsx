@@ -241,6 +241,47 @@ function snapshotDefaults(skills: any[], skillName: string, extra?: any) {
   };
 }
 
+function cameraTemplateUrl(cameras: any[], cameraId: number): string {
+  const cam = cameras.find((c) => Number(c.id) === Number(cameraId));
+  return String(cam?.basic_image_url || "").trim();
+}
+
+/** 带模板技能：优先用已有值，否则用摄像头基准图 URL */
+function withCameraTemplate(
+  skillsCatalog: any[],
+  skillName: string,
+  snap: ReturnType<typeof snapshotDefaults>,
+  cameraUrl: string
+) {
+  const needs =
+    skillRunMode(skillsCatalog, skillName) === "snapshot" ||
+    skillNeedsReferenceTemplate(skillsCatalog, skillName);
+  if (!needs) return snap;
+  const cur = String(snap.reference_image_url || "").trim();
+  if (cur || !cameraUrl) return snap;
+  return { ...snap, reference_image_url: cameraUrl };
+}
+
+function applyCameraTemplateOnCameraChange(
+  skillBindings: SkillBinding[],
+  skillsCatalog: any[],
+  prevCameraUrl: string,
+  nextCameraUrl: string
+): SkillBinding[] {
+  return skillBindings.map((s) => {
+    const needs =
+      skillRunMode(skillsCatalog, s.skill_name) === "snapshot" ||
+      skillNeedsReferenceTemplate(skillsCatalog, s.skill_name);
+    if (!needs) return s;
+    const cur = String(s.reference_image_url || "").trim();
+    // 空，或仍是上一摄像头自动带入的模板 → 换成新摄像头模板
+    if (!cur || (prevCameraUrl && cur === prevCameraUrl)) {
+      return { ...s, reference_image_url: nextCameraUrl };
+    }
+    return s;
+  });
+}
+
 function normalizeTimeInput(v: string, fallback: string) {
   const t = (v || "").trim();
   if (/^\d{2}:\d{2}/.test(t)) return t.slice(0, 5);
@@ -431,7 +472,13 @@ export default function TasksPage() {
       pool[0]?.skill_name ||
       "person_presence_detector26";
     const track = trackingDefaults(skills, next);
-    const snap = snapshotDefaults(skills, next);
+    const camUrl = cameraTemplateUrl(cameras, form.camera_id);
+    const snap = withCameraTemplate(
+      skills,
+      next,
+      snapshotDefaults(skills, next),
+      camUrl
+    );
     setForm((f) => ({
       ...f,
       skills: [
@@ -461,11 +508,18 @@ export default function TasksPage() {
     const firstSkill =
       selectableSkills[0]?.skill_name || emptySkill().skill_name;
     const track = trackingDefaults(skills, firstSkill);
-    const snap = snapshotDefaults(skills, firstSkill);
+    const cameraId = cameras[0]?.id || 0;
+    const camUrl = cameraTemplateUrl(cameras, cameraId);
+    const snap = withCameraTemplate(
+      skills,
+      firstSkill,
+      snapshotDefaults(skills, firstSkill),
+      camUrl
+    );
     setEditingId(null);
     setForm({
       ...emptyForm(),
-      camera_id: cameras[0]?.id || 0,
+      camera_id: cameraId,
       worker_id: defaultWorker,
       skills: [
         {
@@ -964,14 +1018,32 @@ export default function TasksPage() {
                     <select
                       required
                       value={form.camera_id || ""}
-                      onChange={(e) =>
-                        setForm({ ...form, camera_id: Number(e.target.value) })
-                      }
+                      onChange={(e) => {
+                        const cameraId = Number(e.target.value);
+                        const prevUrl = cameraTemplateUrl(
+                          cameras,
+                          form.camera_id
+                        );
+                        const nextUrl = cameraTemplateUrl(cameras, cameraId);
+                        setForm({
+                          ...form,
+                          camera_id: cameraId,
+                          skills: applyCameraTemplateOnCameraChange(
+                            form.skills,
+                            skills,
+                            prevUrl,
+                            nextUrl
+                          ),
+                        });
+                      }}
                     >
                       {!cameras.length && <option value="">请先添加摄像头</option>}
                       {cameras.map((c) => (
                         <option key={c.id} value={c.id}>
                           #{c.id} {c.name}
+                          {c.basic_image_url || c.has_basic_image
+                            ? " · 有模板"
+                            : ""}
                         </option>
                       ))}
                     </select>
@@ -1112,7 +1184,8 @@ export default function TasksPage() {
                 )}
                 {formHasSnapshot && (
                   <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
-                    周期截图技能由本机定时 ZLM 截图识别，不占用实时解码 Worker；请预先提供校准模板图片地址。
+                    周期截图技能由本机定时 ZLM 截图识别，不占用实时解码 Worker；
+                    选择摄像头后将自动带入该摄像头的基准模板 URL，也可手动修改或重新上传。
                   </p>
                 )}
                 {form.skills.some((s) =>
@@ -1121,6 +1194,7 @@ export default function TasksPage() {
                   !formHasSnapshot && (
                   <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
                     挪移/角度/过暗等技能走实时视频 Worker；请预先提供校准模板图片地址。
+                    选择摄像头后将自动带入该摄像头的基准模板 URL，也可手动修改或重新上传。
                   </p>
                 )}
 
@@ -1286,7 +1360,16 @@ export default function TasksPage() {
                             onChange={(e) => {
                               const skill_name = e.target.value;
                               const defaults = trackingDefaults(skills, skill_name);
-                              const snap = snapshotDefaults(skills, skill_name);
+                              const camUrl = cameraTemplateUrl(
+                                cameras,
+                                form.camera_id
+                              );
+                              const snap = withCameraTemplate(
+                                skills,
+                                skill_name,
+                                snapshotDefaults(skills, skill_name),
+                                camUrl
+                              );
                               updateSkill(s.key, {
                                 skill_name,
                                 enable_tracking: defaults.enable_tracking,
@@ -1324,7 +1407,7 @@ export default function TasksPage() {
                                       reference_image_url: e.target.value,
                                     })
                                   }
-                                  placeholder="填写图片 URL / 服务器路径，或右侧上传本地图片"
+                                  placeholder="已自动带入摄像头模板 URL；也可手动填写或右侧上传"
                                 />
                                 <label
                                   className={`btn ${

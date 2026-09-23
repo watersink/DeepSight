@@ -109,6 +109,7 @@ def _camera_to_dict(
     site = getattr(row, "site", None)
     mine = getattr(site, "mine", None) if site is not None else None
     basic_b64 = str(getattr(row, "basic_image_base64", None) or "").strip()
+    basic_url = str(getattr(row, "basic_image_url", None) or "").strip()
     data = {
         "id": row.id,
         "name": row.name,
@@ -125,7 +126,8 @@ def _camera_to_dict(
         "ps_station_code": getattr(row, "ps_station_code", None) or "",
         "analysis_type": getattr(row, "analysis_type", None) or "",
         "data_time": getattr(row, "data_time", None) or "",
-        "has_basic_image": bool(basic_b64),
+        "has_basic_image": bool(basic_url or basic_b64),
+        "basic_image_url": basic_url,
         "basic_image_base64": basic_b64 if include_basic_image else None,
         "site_id": row.site_id,
         "site_name": site.name if site is not None else None,
@@ -176,6 +178,70 @@ def _normalize_basic_image_base64(raw: Optional[str]) -> Optional[str]:
     return f"data:image/jpeg;base64,{text}"
 
 
+def _decode_basic_image_data_uri(data_uri: str) -> Tuple[bytes, str]:
+    """解析 data:image/...;base64,... → (bytes, content_type)。"""
+    text = str(data_uri or "").strip()
+    if not text:
+        raise ValueError("基准图为空")
+    content_type = "image/jpeg"
+    payload = text
+    if text.startswith("data:"):
+        header, _, payload = text.partition(",")
+        if not payload:
+            raise ValueError("基准图 dataURL 无效")
+        mime = header[5:].split(";")[0].strip().lower()
+        if mime:
+            content_type = mime
+    try:
+        raw = base64.b64decode(payload, validate=False)
+    except Exception as e:
+        raise ValueError(f"基准图 Base64 解码失败: {e}") from e
+    if not raw:
+        raise ValueError("基准图解码结果为空")
+    return raw, content_type
+
+
+def _camera_has_basic_image(row: Camera) -> bool:
+    return bool(
+        str(getattr(row, "basic_image_url", None) or "").strip()
+        or str(getattr(row, "basic_image_base64", None) or "").strip()
+    )
+
+
+def _persist_camera_basic_image(
+    db: Session,
+    row: Camera,
+    jpeg: bytes,
+    *,
+    content_type: str = "image/jpeg",
+) -> Camera:
+    """写入 Base64（煤安推送）并上传 MinIO 得到 URL（任务模板自动带入）。"""
+    ct = (content_type or "image/jpeg").split(";")[0].strip().lower() or "image/jpeg"
+    b64 = base64.b64encode(jpeg).decode("ascii")
+    row.basic_image_base64 = f"data:{ct};base64,{b64}"
+    try:
+        uploaded = upload_calibration_image(jpeg, ct)
+        row.basic_image_url = str(uploaded.get("url") or "").strip()
+    except Exception as e:
+        logger.warning(
+            "摄像头模板上传对象存储失败 camera_id=%s: %s",
+            getattr(row, "id", None),
+            e,
+        )
+    if not str(row.data_time or "").strip():
+        row.data_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _persist_camera_basic_image_data_uri(
+    db: Session, row: Camera, data_uri: str
+) -> Camera:
+    jpeg, content_type = _decode_basic_image_data_uri(data_uri)
+    return _persist_camera_basic_image(db, row, jpeg, content_type=content_type)
+
+
 def _normalize_camera_mt_fields(data: dict, *, for_create: bool = False) -> dict:
     """补齐 MT/T 字段默认值与校验。"""
     out = dict(data)
@@ -223,20 +289,16 @@ def _normalize_camera_mt_fields(data: dict, *, for_create: bool = False) -> dict
 
 
 def _capture_basic_image_after_save(db: Session, row: Camera) -> Camera:
-    """配置完成后调用 ZLM getSnap，写入基准模板图。失败仅告警不回滚摄像头配置。"""
+    """配置完成后调用 ZLM getSnap，写入基准模板图（Base64 + URL）。失败仅告警不回滚。"""
     try:
         candidates = resolve_camera_snap_urls(db, row)
         jpeg = zlm_client.get_snap_prefer_zlm(candidates)
-        b64 = base64.b64encode(jpeg).decode("ascii")
-        row.basic_image_base64 = f"data:image/jpeg;base64,{b64}"
-        if not str(row.data_time or "").strip():
-            row.data_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        db.commit()
-        db.refresh(row)
+        row = _persist_camera_basic_image(db, row, jpeg, content_type="image/jpeg")
         logger.info(
-            "摄像头模板已自动截取 camera_id=%s bytes=%s",
+            "摄像头模板已自动截取 camera_id=%s bytes=%s url=%s",
             row.id,
             len(jpeg),
+            str(getattr(row, "basic_image_url", None) or "")[:120],
         )
     except Exception as e:
         logger.warning(
@@ -744,17 +806,45 @@ def create_camera(db: Session, data: dict) -> Camera:
         "analysis_type",
         "data_time",
         "basic_image_base64",
+        "basic_image_url",
         "site_id",
         "enabled",
         "remark",
     }
     payload = {k: data[k] for k in allowed if k in data}
+    # 手动上传先落库 Base64；URL 在下方统一上传对象存储后回填
     row = Camera(**payload)
     db.add(row)
     db.commit()
     db.refresh(row)
-    if not provided_img:
+    if provided_img:
+        try:
+            row = _persist_camera_basic_image_data_uri(
+                db, row, str(row.basic_image_base64 or "")
+            )
+        except Exception as e:
+            logger.warning(
+                "摄像头手动模板上传对象存储失败 camera_id=%s: %s",
+                getattr(row, "id", None),
+                e,
+            )
+    else:
         row = _capture_basic_image_after_save(db, row)
+    # 历史数据仅有 Base64、尚无 URL 时补传对象存储
+    if (
+        str(getattr(row, "basic_image_base64", None) or "").strip()
+        and not str(getattr(row, "basic_image_url", None) or "").strip()
+    ):
+        try:
+            row = _persist_camera_basic_image_data_uri(
+                db, row, str(row.basic_image_base64 or "")
+            )
+        except Exception as e:
+            logger.warning(
+                "摄像头历史模板补传 URL 失败 camera_id=%s: %s",
+                getattr(row, "id", None),
+                e,
+            )
     cache_delete(CACHE_CAMERAS)
     try:
         from app.services.coal_camera_push import push_camera_config
@@ -778,6 +868,9 @@ def get_camera(db: Session, camera_id: int) -> Optional[Camera]:
 def update_camera(db: Session, row: Camera, data: dict) -> Camera:
     data = _sync_camera_mine_code(db, dict(data))
     data = _normalize_camera_mt_fields(data, for_create=False)
+    clearing_img = "basic_image_base64" in data and not bool(
+        str(data.get("basic_image_base64") or "").strip()
+    )
     provided_img = "basic_image_base64" in data and bool(
         str(data.get("basic_image_base64") or "").strip()
     )
@@ -819,15 +912,44 @@ def update_camera(db: Session, row: Camera, data: dict) -> Camera:
             "source_url",
             "proxy_key",
             "basic_image_base64",
+            "basic_image_url",
         }:
             setattr(row, k, v)
+    if clearing_img:
+        row.basic_image_url = ""
+        row.basic_image_base64 = None
     db.commit()
     db.refresh(row)
-    # 未手动传模板时：无模板或流地址变更 → 自动 getSnap
-    if not provided_img and (
-        stream_changed or not str(getattr(row, "basic_image_base64", None) or "").strip()
+    if provided_img:
+        try:
+            row = _persist_camera_basic_image_data_uri(
+                db, row, str(row.basic_image_base64 or "")
+            )
+        except Exception as e:
+            logger.warning(
+                "摄像头手动模板上传对象存储失败 camera_id=%s: %s",
+                getattr(row, "id", None),
+                e,
+            )
+    elif not provided_img and (
+        stream_changed or clearing_img or not _camera_has_basic_image(row)
     ):
+        # 未手动传模板时：无模板或流地址变更 / 用户清空 → 自动 getSnap
         row = _capture_basic_image_after_save(db, row)
+    elif (
+        str(getattr(row, "basic_image_base64", None) or "").strip()
+        and not str(getattr(row, "basic_image_url", None) or "").strip()
+    ):
+        try:
+            row = _persist_camera_basic_image_data_uri(
+                db, row, str(row.basic_image_base64 or "")
+            )
+        except Exception as e:
+            logger.warning(
+                "摄像头历史模板补传 URL 失败 camera_id=%s: %s",
+                getattr(row, "id", None),
+                e,
+            )
     cache_delete(CACHE_CAMERAS)
     try:
         from app.services.coal_camera_push import push_camera_config

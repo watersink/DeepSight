@@ -66,7 +66,7 @@ class CameraShiftDetectorSkill(BaseSkill):
                 "label": "连续确认次数",
                 "type": "number",
                 "required": False,
-                "default": 3,
+                "default": 2,
             },
             {
                 "key": "cooldown_sec",
@@ -269,6 +269,19 @@ class CameraShiftDetectorSkill(BaseSkill):
         except Exception as e:
             logger.exception("位置挪移检测失败")
             return SkillResult.error_result(str(e))
+
+    def _draw_detections_on_frame(
+        self, frame: np.ndarray, alert_data: Dict[str, Any]
+    ) -> np.ndarray:
+        """供实时视频流水线调用：把最近一次挪移检测结果画到画面上。"""
+        try:
+            data = alert_data if isinstance(alert_data, dict) else {}
+            if not data and isinstance(self._last_result, dict):
+                data = self._last_result
+            return _draw_shift_overlay(frame, data)
+        except Exception as e:
+            logger.error("绘制位置挪移检测结果失败: %s", e)
+            return frame
 
 
 def _ascii_only(text: Any, *, fallback: str = "") -> str:
@@ -549,16 +562,22 @@ def test_video() -> None:
                     last_result = skill.detect_frame(frame)
                 except Exception as e:
                     last_result = {
-                        # status: skip/normal/fail/shift_pending/shift/shift_cooldown
+                        # status 含义：
+                        #   skip           — SSIM 很高，画面与模板高度一致，跳过细检（正常）
+                        #   normal         — 几何估计成功，且平移量未超阈（正常）
+                        #   fail           — 遮挡/失焦/匹配不足/内点差，或本处异常，无法可靠判决
+                        #   shift_pending  — 已超阈，但连续确认次数尚未达到 confirm_count
+                        #   shift          — 已超阈且确认够次、非冷却，触发位置挪移告警
+                        #   shift_cooldown — 已超阈且确认够次，但仍在告警冷却期内
                         "status": "fail",
-                        "message": str(e),
-                        "shift_px": 0.0,
-                        "shift_threshold_px": skill.shift_threshold_px,
-                        "ssim": None,
-                        "match_count": 0,
-                        "inlier_ratio": 0.0,
-                        "shift_streak": 0,
-                        "has_camera_shift": False,
+                        "message": str(e),  # 失败原因说明
+                        "shift_px": 0.0,  # 相对模板的平移量（像素）
+                        "shift_threshold_px": skill.shift_threshold_px,  # 平移告警阈值（像素）
+                        "ssim": None,  # 与模板的结构相似度
+                        "match_count": 0,  # 特征匹配点数
+                        "inlier_ratio": 0.0,  # 单应内点比例
+                        "shift_streak": 0,  # 连续超阈确认计数
+                        "has_camera_shift": False,  # 是否触发告警；True 需：几何 normal + 平移超阈 + streak≥confirm_count + 非冷却
                     }
                 last_infer_ts = now
 

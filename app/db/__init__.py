@@ -325,6 +325,10 @@ def _ensure_camera_mt_columns() -> None:
             )
         if "basic_image_base64" not in cam_cols:
             alters.append("ADD COLUMN `basic_image_base64` MEDIUMTEXT NULL")
+        if "basic_image_url" not in cam_cols:
+            alters.append(
+                "ADD COLUMN `basic_image_url` VARCHAR(512) NOT NULL DEFAULT ''"
+            )
         if alters:
             conn.execute(
                 text(f"ALTER TABLE `mgmt_cameras` {', '.join(alters)}")

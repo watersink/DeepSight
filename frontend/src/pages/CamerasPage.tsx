@@ -145,6 +145,7 @@ const emptyCamDraft = () => ({
   analysis_type: "01" as AnalysisType,
   data_time: formatDataTime(),
   basic_image_base64: "",
+  basic_image_url: "",
   has_basic_image: false,
   site_id: null as number | null,
   enabled: true,
@@ -322,8 +323,11 @@ export default function CamerasPage() {
       analysis_type: normalizeAnalysisType(detail?.analysis_type),
       data_time: detail?.data_time || formatDataTime(),
       basic_image_base64: detail?.basic_image_base64 || "",
+      basic_image_url: detail?.basic_image_url || "",
       has_basic_image: !!(
-        detail?.has_basic_image || detail?.basic_image_base64
+        detail?.has_basic_image ||
+        detail?.basic_image_base64 ||
+        detail?.basic_image_url
       ),
       site_id:
         detail?.site_id ??
@@ -1245,7 +1249,7 @@ export default function CamerasPage() {
 
             <aside className="camera-template-panel">
               <label className="form-field">
-                基准模板图（可空，保存后自动 ZLM 截图）
+                基准模板图（可空，保存后自动 ZLM 截图并生成 URL）
                 <input
                   type="file"
                   accept="image/*"
@@ -1258,6 +1262,7 @@ export default function CamerasPage() {
                       setCamDraft({
                         ...camDraft,
                         basic_image_base64: result,
+                        basic_image_url: "",
                         has_basic_image: !!result,
                       });
                     };
@@ -1266,15 +1271,32 @@ export default function CamerasPage() {
                 />
               </label>
               <div className="camera-template-preview">
-                {camDraft.basic_image_base64 ? (
+                {camDraft.basic_image_base64 || camDraft.basic_image_url ? (
                   <>
                     <p className="muted" style={{ margin: "0 0 8px" }}>
-                      当前模板预览（保存时若留空将由服务端自动截取）
+                      {camDraft.basic_image_base64
+                        ? "当前模板预览（保存后将上传并写入 URL）"
+                        : "当前模板预览（保存时若留空将由服务端自动截取）"}
                     </p>
                     <img
-                      src={camDraft.basic_image_base64}
+                      src={
+                        camDraft.basic_image_base64 || camDraft.basic_image_url
+                      }
                       alt="基准模板"
                     />
+                    {!!camDraft.basic_image_url && (
+                      <p
+                        className="mono muted"
+                        style={{
+                          margin: "8px 0 0",
+                          wordBreak: "break-all",
+                          fontSize: 11,
+                        }}
+                        title={camDraft.basic_image_url}
+                      >
+                        {camDraft.basic_image_url}
+                      </p>
+                    )}
                     <div className="toolbar" style={{ marginTop: 8 }}>
                       <button
                         className="btn ghost"
@@ -1283,6 +1305,7 @@ export default function CamerasPage() {
                           setCamDraft({
                             ...camDraft,
                             basic_image_base64: "",
+                            basic_image_url: "",
                             has_basic_image: false,
                           })
                         }
@@ -1297,7 +1320,8 @@ export default function CamerasPage() {
                   </p>
                 ) : (
                   <p className="muted" style={{ margin: 0 }}>
-                    暂无模板预览。可上传图片，或保存后由服务端自动截取。
+                    暂无模板预览。可上传图片，或保存后由服务端自动截取并生成
+                    URL。
                   </p>
                 )}
               </div>
