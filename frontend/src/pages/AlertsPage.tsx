@@ -348,15 +348,7 @@ export default function AlertsPage() {
                 </p>
               )}
               <pre
-                className="mono"
-                style={{
-                  whiteSpace: "pre-wrap",
-                  background: "#101613",
-                  padding: 12,
-                  borderRadius: 8,
-                  maxHeight: 360,
-                  overflow: "auto",
-                }}
+                className="mono payload-preview"
               >
                 {JSON.stringify(selected.payload || selected, null, 2)}
               </pre>

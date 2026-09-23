@@ -104,9 +104,9 @@ class CameraCreate(BaseModel):
         max_length=32,
         description="站点编码（关联人员定位分站编码）",
     )
-    analysis_type: Literal["01", "02"] = Field(
+    analysis_type: Literal["01", "02", "03"] = Field(
         ...,
-        description="分析类型：01=人员计数（入），02=人员计数（出）",
+        description="分析类型：01=人员计数（入），02=人员计数（出），03=视频质量检测",
     )
     data_time: str = Field(
         default="",
@@ -134,7 +134,7 @@ class CameraUpdate(BaseModel):
     position_type: Optional[str] = Field(default=None, min_length=1, max_length=32)
     position_desc: Optional[str] = Field(default=None, min_length=1, max_length=255)
     ps_station_code: Optional[str] = Field(default=None, max_length=32)
-    analysis_type: Optional[Literal["01", "02"]] = None
+    analysis_type: Optional[Literal["01", "02", "03"]] = None
     data_time: Optional[str] = Field(default=None, max_length=32)
     basic_image_base64: Optional[str] = None
     enabled: Optional[bool] = None

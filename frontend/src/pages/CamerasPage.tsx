@@ -119,7 +119,15 @@ function formatDataTime(d = new Date()): string {
 function analysisTypeLabel(code: string): string {
   if (code === "01") return "01 人员计数（入）";
   if (code === "02") return "02 人员计数（出）";
+  if (code === "03") return "03 视频质量检测";
   return code || "—";
+}
+
+type AnalysisType = "01" | "02" | "03";
+
+function normalizeAnalysisType(code: unknown): AnalysisType {
+  if (code === "02" || code === "03") return code;
+  return "01";
 }
 
 const emptyCamDraft = () => ({
@@ -134,7 +142,7 @@ const emptyCamDraft = () => ({
   position_type: "",
   position_desc: "",
   ps_station_code: "",
-  analysis_type: "01" as "01" | "02",
+  analysis_type: "01" as AnalysisType,
   data_time: formatDataTime(),
   basic_image_base64: "",
   has_basic_image: false,
@@ -311,8 +319,7 @@ export default function CamerasPage() {
       position_type: detail?.position_type || "",
       position_desc: detail?.position_desc || "",
       ps_station_code: detail?.ps_station_code || "",
-      analysis_type:
-        detail?.analysis_type === "02" ? "02" : "01",
+      analysis_type: normalizeAnalysisType(detail?.analysis_type),
       data_time: detail?.data_time || formatDataTime(),
       basic_image_base64: detail?.basic_image_base64 || "",
       has_basic_image: !!(
@@ -1019,270 +1026,282 @@ export default function CamerasPage() {
           onClose={() => setDialog(null)}
           onSubmit={saveCamera}
           submitText="保存"
-          width="min(760px, 100%)"
+          width="min(1080px, 96vw)"
         >
-          <div className="form-grid">
-            <label>
-              名称
-              <input
-                required
-                value={camDraft.name}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, name: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              归属地点
-              <select
-                required={dialog.mode === "create"}
-                value={camDraft.site_id || ""}
-                onChange={(e) =>
-                  setCamDraft({
-                    ...camDraft,
-                    site_id: e.target.value ? Number(e.target.value) : null,
-                  })
-                }
-              >
-                <option value="">请选择</option>
-                {siteOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              摄像仪编码 *
-              <input
-                required
-                placeholder="如 34020000001320000001"
-                value={camDraft.camera_code}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, camera_code: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              煤矿编码（可空）
-              <input
-                placeholder="12 位数字，空则用服务端默认"
-                value={camDraft.mine_code}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, mine_code: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              安装位置分类编码 *
-              <input
-                required
-                placeholder="如 0101（参照 MT/T 1201.6-2023）"
-                value={camDraft.position_type}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, position_type: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              分析类型 *
-              <select
-                required
-                value={camDraft.analysis_type}
-                onChange={(e) =>
-                  setCamDraft({
-                    ...camDraft,
-                    analysis_type: e.target.value as "01" | "02",
-                  })
-                }
-              >
-                <option value="01">01 人员计数（入）</option>
-                <option value="02">02 人员计数（出）</option>
-              </select>
-            </label>
-            <label className="full">
-              安装位置描述 *
-              <input
-                required
-                placeholder="如 副井口入井通道"
-                value={camDraft.position_desc}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, position_desc: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              站点编码（可空）
-              <input
-                placeholder="人员定位分站编码"
-                value={camDraft.ps_station_code}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, ps_station_code: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              数据生成时间 *
-              <input
-                required
-                placeholder="yyyy-MM-dd HH:mm:ss"
-                value={camDraft.data_time}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, data_time: e.target.value })
-                }
-              />
-            </label>
-            <label className="full">
-              接入方式
-              <select
-                value={camDraft.ingest_mode}
-                onChange={(e) =>
-                  setCamDraft({
-                    ...camDraft,
-                    ingest_mode: e.target.value as "push" | "proxy",
-                  })
-                }
-              >
-                <option value="push">推流登记（已由 FFmpeg 等推到 ZLM）</option>
-                <option value="proxy">拉流代理（摄像头原始地址 → ZLM addStreamProxy）</option>
-              </select>
-            </label>
-            {camDraft.ingest_mode === "proxy" ? (
-              <label className="full">
-                摄像头原始地址 source_url
+          <div className="camera-edit-layout">
+            <div className="form-grid">
+              <label>
+                名称
                 <input
                   required
-                  placeholder="rtsp://user:pass@ip:554/Streaming/Channels/101"
-                  value={camDraft.source_url}
+                  value={camDraft.name}
                   onChange={(e) =>
-                    setCamDraft({ ...camDraft, source_url: e.target.value })
+                    setCamDraft({ ...camDraft, name: e.target.value })
                   }
                 />
               </label>
-            ) : (
-              <label className="full">
-                ZLM 流地址 in_url（可与下方 app/stream 二选一）
-                <input
-                  placeholder="rtmp://zlm-host:1935/live/cam001"
-                  value={camDraft.in_url}
+              <label>
+                归属地点
+                <select
+                  required={dialog.mode === "create"}
+                  value={camDraft.site_id || ""}
                   onChange={(e) =>
-                    setCamDraft({ ...camDraft, in_url: e.target.value })
-                  }
-                />
-              </label>
-            )}
-            <label>
-              ZLM app
-              <input
-                placeholder={camDraft.ingest_mode === "proxy" ? "默认 live" : "live"}
-                value={camDraft.zlm_app}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, zlm_app: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              ZLM stream
-              <input
-                placeholder={
-                  camDraft.ingest_mode === "proxy"
-                    ? "空则用摄像仪编码生成"
-                    : "与 in_url 二选一"
-                }
-                value={camDraft.zlm_stream}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, zlm_stream: e.target.value })
-                }
-              />
-            </label>
-            {dialog.mode === "edit" && camDraft.ingest_mode === "proxy" && (
-              <p className="muted full" style={{ margin: 0, gridColumn: "1 / -1" }}>
-                平台拉流地址（自动生成）：{camDraft.in_url || "保存后生成"}
-              </p>
-            )}
-            <label className="full">
-              基准模板图（可空，保存后自动 ZLM 截图）
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  const reader = new FileReader();
-                  reader.onload = () => {
-                    const result = String(reader.result || "");
                     setCamDraft({
                       ...camDraft,
-                      basic_image_base64: result,
-                      has_basic_image: !!result,
-                    });
-                  };
-                  reader.readAsDataURL(file);
-                }}
-              />
-            </label>
-            {(camDraft.basic_image_base64 || camDraft.has_basic_image) && (
-              <div className="full" style={{ gridColumn: "1 / -1" }}>
-                <p className="muted" style={{ margin: "0 0 8px" }}>
-                  {camDraft.basic_image_base64
-                    ? "当前模板预览（保存时若留空将由服务端自动截取）"
-                    : "已有模板（列表未加载大图；保存且未重传时将按流变更策略刷新）"}
-                </p>
-                {camDraft.basic_image_base64 && (
-                  <img
-                    src={camDraft.basic_image_base64}
-                    alt="基准模板"
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: 180,
-                      borderRadius: 6,
-                      border: "1px solid var(--border, #ddd)",
-                    }}
+                      site_id: e.target.value ? Number(e.target.value) : null,
+                    })
+                  }
+                >
+                  <option value="">请选择</option>
+                  {siteOptions.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                摄像仪编码 *
+                <input
+                  required
+                  placeholder="如 34020000001320000001"
+                  value={camDraft.camera_code}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, camera_code: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                煤矿编码（可空）
+                <input
+                  placeholder="12 位数字，空则用服务端默认"
+                  value={camDraft.mine_code}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, mine_code: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                安装位置分类编码 *
+                <input
+                  required
+                  placeholder="如 0101（参照 MT/T 1201.6-2023）"
+                  value={camDraft.position_type}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, position_type: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                分析类型 *
+                <select
+                  required
+                  value={camDraft.analysis_type}
+                  onChange={(e) =>
+                    setCamDraft({
+                      ...camDraft,
+                      analysis_type: e.target.value as AnalysisType,
+                    })
+                  }
+                >
+                  <option value="01">01 人员计数（入）</option>
+                  <option value="02">02 人员计数（出）</option>
+                  <option value="03">03 视频质量检测</option>
+                </select>
+              </label>
+              <label className="full">
+                安装位置描述 *
+                <input
+                  required
+                  placeholder="如 副井口入井通道"
+                  value={camDraft.position_desc}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, position_desc: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                站点编码（可空）
+                <input
+                  placeholder="人员定位分站编码"
+                  value={camDraft.ps_station_code}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, ps_station_code: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                数据生成时间 *
+                <input
+                  required
+                  placeholder="yyyy-MM-dd HH:mm:ss"
+                  value={camDraft.data_time}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, data_time: e.target.value })
+                  }
+                />
+              </label>
+              <label className="full">
+                接入方式
+                <select
+                  value={camDraft.ingest_mode}
+                  onChange={(e) =>
+                    setCamDraft({
+                      ...camDraft,
+                      ingest_mode: e.target.value as "push" | "proxy",
+                    })
+                  }
+                >
+                  <option value="push">推流登记（已由 FFmpeg 等推到 ZLM）</option>
+                  <option value="proxy">
+                    拉流代理（摄像头原始地址 → ZLM addStreamProxy）
+                  </option>
+                </select>
+              </label>
+              {camDraft.ingest_mode === "proxy" ? (
+                <label className="full">
+                  摄像头原始地址 source_url
+                  <input
+                    required
+                    placeholder="rtsp://user:pass@ip:554/Streaming/Channels/101"
+                    value={camDraft.source_url}
+                    onChange={(e) =>
+                      setCamDraft({ ...camDraft, source_url: e.target.value })
+                    }
                   />
-                )}
-                {camDraft.basic_image_base64 && (
-                  <div className="toolbar" style={{ marginTop: 8 }}>
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      onClick={() =>
-                        setCamDraft({
-                          ...camDraft,
-                          basic_image_base64: "",
-                          has_basic_image: false,
-                        })
-                      }
-                    >
-                      清除本地模板（保存后自动截取）
-                    </button>
-                  </div>
+                </label>
+              ) : (
+                <label className="full">
+                  ZLM 流地址 in_url（可与下方 app/stream 二选一）
+                  <input
+                    placeholder="rtmp://zlm-host:1935/live/cam001"
+                    value={camDraft.in_url}
+                    onChange={(e) =>
+                      setCamDraft({ ...camDraft, in_url: e.target.value })
+                    }
+                  />
+                </label>
+              )}
+              <label>
+                ZLM app
+                <input
+                  placeholder={
+                    camDraft.ingest_mode === "proxy" ? "默认 live" : "live"
+                  }
+                  value={camDraft.zlm_app}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, zlm_app: e.target.value })
+                  }
+                />
+              </label>
+              <label>
+                ZLM stream
+                <input
+                  placeholder={
+                    camDraft.ingest_mode === "proxy"
+                      ? "空则用摄像仪编码生成"
+                      : "与 in_url 二选一"
+                  }
+                  value={camDraft.zlm_stream}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, zlm_stream: e.target.value })
+                  }
+                />
+              </label>
+              {dialog.mode === "edit" && camDraft.ingest_mode === "proxy" && (
+                <p
+                  className="muted full"
+                  style={{ margin: 0, gridColumn: "1 / -1" }}
+                >
+                  平台拉流地址（自动生成）：
+                  {camDraft.in_url || "保存后生成"}
+                </p>
+              )}
+              <label>
+                启用
+                <select
+                  value={camDraft.enabled ? "1" : "0"}
+                  onChange={(e) =>
+                    setCamDraft({
+                      ...camDraft,
+                      enabled: e.target.value === "1",
+                    })
+                  }
+                >
+                  <option value="1">启用</option>
+                  <option value="0">禁用</option>
+                </select>
+              </label>
+              <label>
+                备注
+                <input
+                  value={camDraft.remark}
+                  onChange={(e) =>
+                    setCamDraft({ ...camDraft, remark: e.target.value })
+                  }
+                />
+              </label>
+            </div>
+
+            <aside className="camera-template-panel">
+              <label className="form-field">
+                基准模板图（可空，保存后自动 ZLM 截图）
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      const result = String(reader.result || "");
+                      setCamDraft({
+                        ...camDraft,
+                        basic_image_base64: result,
+                        has_basic_image: !!result,
+                      });
+                    };
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </label>
+              <div className="camera-template-preview">
+                {camDraft.basic_image_base64 ? (
+                  <>
+                    <p className="muted" style={{ margin: "0 0 8px" }}>
+                      当前模板预览（保存时若留空将由服务端自动截取）
+                    </p>
+                    <img
+                      src={camDraft.basic_image_base64}
+                      alt="基准模板"
+                    />
+                    <div className="toolbar" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() =>
+                          setCamDraft({
+                            ...camDraft,
+                            basic_image_base64: "",
+                            has_basic_image: false,
+                          })
+                        }
+                      >
+                        清除本地模板（保存后自动截取）
+                      </button>
+                    </div>
+                  </>
+                ) : camDraft.has_basic_image ? (
+                  <p className="muted" style={{ margin: 0 }}>
+                    已有模板（列表未加载大图；保存且未重传时将按流变更策略刷新）
+                  </p>
+                ) : (
+                  <p className="muted" style={{ margin: 0 }}>
+                    暂无模板预览。可上传图片，或保存后由服务端自动截取。
+                  </p>
                 )}
               </div>
-            )}
-            <label>
-              启用
-              <select
-                value={camDraft.enabled ? "1" : "0"}
-                onChange={(e) =>
-                  setCamDraft({
-                    ...camDraft,
-                    enabled: e.target.value === "1",
-                  })
-                }
-              >
-                <option value="1">启用</option>
-                <option value="0">禁用</option>
-              </select>
-            </label>
-            <label>
-              备注
-              <input
-                value={camDraft.remark}
-                onChange={(e) =>
-                  setCamDraft({ ...camDraft, remark: e.target.value })
-                }
-              />
-            </label>
+            </aside>
           </div>
         </FormDialog>
       )}

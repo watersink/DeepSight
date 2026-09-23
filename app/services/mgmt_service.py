@@ -196,9 +196,11 @@ def _normalize_camera_mt_fields(data: dict, *, for_create: bool = False) -> dict
     if "analysis_type" in out:
         at = str(out.get("analysis_type") or "").strip()
         if for_create and not at:
-            raise ValueError("分析类型 analysis_type 必填（01/02）")
-        if at and at not in {"01", "02"}:
-            raise ValueError("analysis_type 仅支持 01（入）/ 02（出）")
+            raise ValueError("分析类型 analysis_type 必填（01/02/03）")
+        if at and at not in {"01", "02", "03"}:
+            raise ValueError(
+                "analysis_type 仅支持 01（入）/ 02（出）/ 03（视频质量检测）"
+            )
         out["analysis_type"] = at
     if "data_time" in out or for_create:
         dt = str(out.get("data_time") or "").strip()

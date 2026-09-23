@@ -101,7 +101,7 @@ class Camera(Base):
     position_type: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     position_desc: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     ps_station_code: Mapped[str] = mapped_column(String(32), default="", nullable=False)
-    # 01=人员计数（入），02=人员计数（出）
+    # 01=人员计数（入），02=人员计数（出），03=视频质量检测
     analysis_type: Mapped[str] = mapped_column(String(8), default="", nullable=False)
     # yyyy-MM-dd HH:mm:ss
     data_time: Mapped[str] = mapped_column(String(32), default="", nullable=False)
