@@ -6,6 +6,7 @@ from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
 from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
 from app.plugins.skills.guoan_detector_skill import GuoanDetectorSkill
+from app.plugins.skills.guobao_detector_skill import GuobaoDetectorSkill
 from app.plugins.skills.non_fixed_parking_boarding_detector_skill import (
     NonFixedParkingBoardingDetectorSkill,
 )
@@ -36,6 +37,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     CameraShiftDetectorSkill.DEFAULT_CONFIG["name"]: CameraShiftDetectorSkill,
     CameraTiltDetectorSkill.DEFAULT_CONFIG["name"]: CameraTiltDetectorSkill,
     GuoanDetectorSkill.DEFAULT_CONFIG["name"]: GuoanDetectorSkill,
+    GuobaoDetectorSkill.DEFAULT_CONFIG["name"]: GuobaoDetectorSkill,
 }
 
 
@@ -88,9 +90,17 @@ _PARAM_LABELS: Dict[str, str] = {
     "block_drop_ratio": "分块下降比例",
     "block_darken_fraction": "变暗分块占比",
     "ignore_block_mean": "忽略分块均值",
-    "consecutive_seconds": "连续过暗秒数",
+    "consecutive_seconds": "连续确认秒数",
     "exposure_drop_ratio": "曝光下降比例",
     "well_exposed_drop": "正常曝光下降",
+    "bright_pixel_threshold": "亮像素阈值",
+    "median_rise_ratio": "中位数上升比例",
+    "min_median_rise_abs": "中位数最小上升",
+    "bright_ratio_rise": "亮像素比上升",
+    "clip_ratio_rise": "高光裁切上升",
+    "block_rise_ratio": "分块上升比例",
+    "block_brighten_fraction": "变亮分块占比",
+    "exposure_rise_ratio": "曝光上升比例",
     "calibrate_frames": "自动标定帧数",
     "sample_fps": "采样帧率",
     "baseline_path": "基准文件路径",
