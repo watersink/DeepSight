@@ -7,8 +7,15 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# 支持直接运行本文件: python app/plugins/skills/camera_shift_detector_skill.py
+_CODE_ROOT = Path(__file__).resolve().parents[3]
+if str(_CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CODE_ROOT))
 
 import numpy as np
 
@@ -261,3 +268,73 @@ class CameraShiftDetectorSkill(BaseSkill):
         except Exception as e:
             logger.exception("位置挪移检测失败")
             return SkillResult.error_result(str(e))
+
+
+def main() -> None:
+    """本地双图测试：模板图 + 测试图 → 输出挪移检测结果。
+
+    用法:
+      python -m app.plugins.skills.camera_shift_detector_skill \\
+          --ref template.jpg --cur test.jpg
+    """
+    import argparse
+    import json
+    import sys
+    from copy import deepcopy
+
+    parser = argparse.ArgumentParser(description="摄像头位置挪移检测（双图离线测试）")
+    parser.add_argument(
+        "--ref",
+        "--reference",
+        dest="reference",
+        required=True,
+        help="校准模板图路径或 URL",
+    )
+    parser.add_argument(
+        "--cur",
+        "--current",
+        dest="current",
+        required=True,
+        help="待检测图路径或 URL",
+    )
+    parser.add_argument(
+        "--shift-threshold-px",
+        type=float,
+        default=None,
+        help="平移告警阈值（像素），默认用技能配置",
+    )
+    parser.add_argument(
+        "--confirm-count",
+        type=int,
+        default=1,
+        help="连续确认次数（离线单次测试默认 1，便于直接出最终结论）",
+    )
+    args = parser.parse_args()
+
+    config = deepcopy(CameraShiftDetectorSkill.DEFAULT_CONFIG)
+    params = config.setdefault("params", {})
+    params["reference_image_url"] = args.reference
+    params["confirm_count"] = max(1, int(args.confirm_count))
+    params["cooldown_sec"] = 0
+    if args.shift_threshold_px is not None:
+        params["shift_threshold_px"] = float(args.shift_threshold_px)
+
+    skill = CameraShiftDetectorSkill(config)
+    current_bgr = pose_core.load_image_bgr(args.current)
+    result = skill.detect_frame(current_bgr)
+
+    print("=== 摄像头位置挪移检测结果 ===")
+    print(f"模板图: {args.reference}")
+    print(f"测试图: {args.current}")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(
+        f"结论: status={result.get('status')} "
+        f"shift_px={result.get('shift_px')} "
+        f"has_camera_shift={result.get('has_camera_shift')} "
+        f"message={result.get('message')}"
+    )
+    sys.exit(0 if result.get("status") != "fail" else 1)
+
+
+if __name__ == "__main__":
+    main()

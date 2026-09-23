@@ -9,9 +9,17 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# 支持直接运行本文件: python app/plugins/skills/camera_tilt_detector_skill.py
+_CODE_ROOT = Path(__file__).resolve().parents[3]
+if str(_CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CODE_ROOT))
+
+import cv2
 import numpy as np
 
 from app.services import camera_pose_core as pose_core
@@ -216,7 +224,18 @@ class CameraTiltDetectorSkill(BaseSkill):
 
         now = time.time()
         active_alerts: List[Dict[str, Any]] = []
-        triggered = False
+        triggered = False  # → has_camera_tilt；需同时满足下列条件才会为 True
+        # 1) 几何估计成功：estimate_pose 返回 status=="normal"（非 skip/fail）。
+        #    SSIM 过高会 skip，匹配不足/内点差会 fail，这两种都不告警。
+        # 2) 角度或透视超阈（_exceeds_tilt）：
+        #    rotation_deg > tilt_threshold_deg（默认 8°），或
+        #    perspective_score > perspective_threshold（默认 0.12）。
+        # 3) 连续确认够次数：超阈后 tilt_streak 累加，达到 confirm_count
+        #    （线上默认 3；test_image/test_video 默认 1，单次超阈即可告警）。
+        # 4) 不在冷却期：距上次告警已超过 cooldown_sec
+        #    （线上默认 60s；测试里为 0）。
+        # 任一不满足时 has_camera_tilt 仍为 False；
+        # 可能是 tilt_pending（还在累计）或 tilt_cooldown（超阈但冷却中）。
         status = pose.status
 
         if pose.status in {"skip", "fail"}:
@@ -263,6 +282,7 @@ class CameraTiltDetectorSkill(BaseSkill):
             "tilt_streak": self._tilt_streak,
             "tilt_threshold_deg": self.tilt_threshold_deg,
             "perspective_threshold": self.perspective_threshold,
+            # has_camera_tilt=True 条件见上方 triggered 注释（几何成功 + 超阈 + 确认次数 + 非冷却）
             "has_camera_tilt": triggered,
             "recognition_types": [RECOGNITION_CODE] if triggered else [],
             "alert_definitions": list(self.alert_definitions),
@@ -286,3 +306,295 @@ class CameraTiltDetectorSkill(BaseSkill):
         except Exception as e:
             logger.exception("角度偏离检测失败")
             return SkillResult.error_result(str(e))
+
+
+def _draw_tilt_overlay(frame: np.ndarray, result: Dict[str, Any]) -> np.ndarray:
+    """把角度偏离检测结果画到画面上（OpenCV 默认字体，用英文避免乱码）。"""
+    status = str(result.get("status") or "")
+    if status in {"tilt", "fail"} or result.get("has_camera_tilt"):
+        color = (0, 0, 255)
+    elif status in {"tilt_pending", "tilt_cooldown"}:
+        color = (0, 165, 255)
+    elif status in {"normal", "skip"}:
+        color = (0, 200, 0)
+    else:
+        color = (200, 200, 200)
+
+    lines = [
+        f"status: {status}",
+        f"rotation_deg: {result.get('rotation_deg')}",
+        f"perspective: {result.get('perspective_score')}",
+        f"shift_px: {result.get('shift_px')}",
+        f"ssim: {result.get('ssim')}",
+        f"match/inlier: {result.get('match_count')} / {result.get('inlier_ratio')}",
+        f"streak: {result.get('tilt_streak')}  alert: {result.get('has_camera_tilt')}",
+        f"msg: {result.get('message') or ''}",
+    ]
+
+    overlay = frame.copy()
+    box_h = 28 + 22 * len(lines)
+    cv2.rectangle(overlay, (8, 8), (min(frame.shape[1] - 8, 720), box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+
+    y = 30
+    for line in lines:
+        cv2.putText(
+            frame,
+            line[:90],
+            (16, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+        y += 22
+    return frame
+
+
+def test_image() -> None:
+    """本地双图测试：模板图 + 测试图 → 输出角度偏离检测结果。
+
+    默认:
+      模板图 = test_images_videos/mobangtu.png
+      测试图 = test_images_videos/camera-angle-deviation.png
+
+    用法:
+      python app/plugins/skills/camera_tilt_detector_skill.py
+      python app/plugins/skills/camera_tilt_detector_skill.py --ref a.png --cur b.png
+    """
+    import argparse
+    import json
+    from copy import deepcopy
+
+    default_ref = str(_CODE_ROOT / "test_images_videos" / "mobangtu.png")
+    default_cur = str(_CODE_ROOT / "test_images_videos" / "camera-angle-deviation.png")
+
+    parser = argparse.ArgumentParser(description="摄像头角度偏离检测（双图离线测试）")
+    parser.add_argument(
+        "--ref",
+        "--reference",
+        dest="reference",
+        default=default_ref,
+        help=f"校准模板图路径或 URL（默认: {default_ref}）",
+    )
+    parser.add_argument(
+        "--cur",
+        "--current",
+        dest="current",
+        default=default_cur,
+        help=f"待检测图路径或 URL（默认: {default_cur}）",
+    )
+    parser.add_argument(
+        "--tilt-threshold-deg",
+        type=float,
+        default=None,
+        help="转角告警阈值（度），默认用技能配置",
+    )
+    parser.add_argument(
+        "--perspective-threshold",
+        type=float,
+        default=None,
+        help="透视告警阈值，默认用技能配置",
+    )
+    parser.add_argument(
+        "--confirm-count",
+        type=int,
+        default=1,
+        help="连续确认次数（离线单次测试默认 1，便于直接出最终结论）",
+    )
+    args = parser.parse_args()
+
+    config = deepcopy(CameraTiltDetectorSkill.DEFAULT_CONFIG)
+    params = config.setdefault("params", {})
+    params["reference_image_url"] = args.reference
+    params["confirm_count"] = max(1, int(args.confirm_count))
+    params["cooldown_sec"] = 0
+    if args.tilt_threshold_deg is not None:
+        params["tilt_threshold_deg"] = float(args.tilt_threshold_deg)
+    if args.perspective_threshold is not None:
+        params["perspective_threshold"] = float(args.perspective_threshold)
+
+    skill = CameraTiltDetectorSkill(config)
+    current_bgr = pose_core.load_image_bgr(args.current)
+    result = skill.detect_frame(current_bgr)
+
+    print("=== 摄像头角度偏离检测结果 ===")
+    print(f"模板图: {args.reference}")
+    print(f"测试图: {args.current}")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(
+        f"结论: status={result.get('status')} "
+        f"rotation_deg={result.get('rotation_deg')} "
+        f"perspective_score={result.get('perspective_score')} "
+        f"has_camera_tilt={result.get('has_camera_tilt')} "
+        f"message={result.get('message')}"
+    )
+    sys.exit(0 if result.get("status") != "fail" else 1)
+
+
+def test_video() -> None:
+    """本机摄像头实时测试角度偏离算法，结果叠加显示在画面上。
+
+    默认用视频/摄像头第一帧作为校准模板；可用 --ref 指定外部模板。
+
+    用法:
+      python app/plugins/skills/camera_tilt_detector_skill.py video
+      python app/plugins/skills/camera_tilt_detector_skill.py video --camera 0
+      python app/plugins/skills/camera_tilt_detector_skill.py video --ref mobangtu.png
+
+    按键: q 退出；s 把当前帧设为新模板。
+    """
+    import argparse
+    from copy import deepcopy
+
+    parser = argparse.ArgumentParser(description="摄像头角度偏离检测（本机摄像头实时测试）")
+    parser.add_argument(
+        "--ref",
+        "--reference",
+        dest="reference",
+        default="",
+        help="校准模板图路径或 URL（默认空=使用视频第一帧）",
+    )
+    parser.add_argument(
+        "--camera",
+        type=int,
+        default=0,
+        help="本机摄像头索引（默认 0）",
+    )
+    parser.add_argument(
+        "--tilt-threshold-deg",
+        type=float,
+        default=None,
+        help="转角告警阈值（度），默认用技能配置",
+    )
+    parser.add_argument(
+        "--perspective-threshold",
+        type=float,
+        default=None,
+        help="透视告警阈值，默认用技能配置",
+    )
+    parser.add_argument(
+        "--confirm-count",
+        type=int,
+        default=1,
+        help="连续确认次数（实时预览默认 1）",
+    )
+    parser.add_argument(
+        "--interval-ms",
+        type=int,
+        default=200,
+        help="检测间隔毫秒（默认 200，减轻本机算力压力）",
+    )
+    args = parser.parse_args()
+
+    config = deepcopy(CameraTiltDetectorSkill.DEFAULT_CONFIG)
+    params = config.setdefault("params", {})
+    params["reference_image_url"] = str(args.reference or "").strip()
+    params["confirm_count"] = max(1, int(args.confirm_count))
+    params["cooldown_sec"] = 0
+    if args.tilt_threshold_deg is not None:
+        params["tilt_threshold_deg"] = float(args.tilt_threshold_deg)
+    if args.perspective_threshold is not None:
+        params["perspective_threshold"] = float(args.perspective_threshold)
+
+    skill = CameraTiltDetectorSkill(config)
+
+    # Windows 下 CAP_DSHOW 往往更稳
+    api = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+    cap = cv2.VideoCapture(int(args.camera), api)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(int(args.camera))
+    if not cap.isOpened():
+        raise RuntimeError(f"无法打开本机摄像头 camera={args.camera}")
+
+    ok, first_frame = cap.read()
+    if not ok or first_frame is None:
+        cap.release()
+        raise RuntimeError("无法读取视频第一帧作为模板")
+
+    if not skill.reference_image_url:
+        gray, _ = pose_core.preprocess_pair(
+            first_frame, first_frame, max_side=skill.max_side
+        )
+        skill._reference_bgr = first_frame.copy()
+        skill._reference_gray = gray
+        skill.reference_image_url = "<first_frame>"
+        print("已用视频第一帧作为校准模板")
+    else:
+        print(f"使用外部校准模板: {skill.reference_image_url}")
+
+    window = "camera_tilt_detector"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    last_result: Dict[str, Any] = {"status": "init", "message": "template ready"}
+    last_infer_ts = 0.0
+    interval_sec = max(0.0, float(args.interval_ms) / 1000.0)
+    # 第一帧已读出：先展示/检测这一帧，再进入后续循环
+    pending_frame: Optional[np.ndarray] = first_frame
+
+    print(
+        f"实时测试已启动: camera={args.camera} ref={skill.reference_image_url} "
+        f"interval={args.interval_ms}ms  (q=退出, s=当前帧设为模板)"
+    )
+    try:
+        while True:
+            if pending_frame is not None:
+                frame = pending_frame
+                pending_frame = None
+            else:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    print("读取摄像头帧失败，退出")
+                    break
+
+            now = time.time()
+            if now - last_infer_ts >= interval_sec:
+                try:
+                    last_result = skill.detect_frame(frame)
+                except Exception as e:
+                    last_result = {
+                        # status 含义：
+                        #   skip          — SSIM 很高，画面与模板高度一致，跳过细检（正常）
+                        #   normal        — 几何估计成功，且转角/透视未超阈（正常）
+                        #   fail          — 遮挡/失焦/匹配不足/内点差，或本处异常，无法可靠判决
+                        #   tilt_pending  — 已超阈，但连续确认次数尚未达到 confirm_count
+                        #   tilt          — 已超阈且确认够次、非冷却，触发角度偏离告警
+                        #   tilt_cooldown — 已超阈且确认够次，但仍在告警冷却期内
+                        "status": "fail",
+                        "message": str(e),  # 失败原因说明
+                        "rotation_deg": 0.0,  # 相对模板的转角（度）
+                        "perspective_score": 0.0,  # 透视/俯仰偏离强度
+                        "shift_px": 0.0,  # 相对模板的平移量（像素）
+                        "ssim": None,  # 与模板的结构相似度
+                        "match_count": 0,  # 特征匹配点数
+                        "inlier_ratio": 0.0,  # 单应内点比例
+                        "tilt_streak": 0,  # 连续超阈确认计数
+                        "has_camera_tilt": False,  # 是否触发告警；True 需：几何 normal + 转角/透视超阈 + streak≥confirm_count + 非冷却
+                    }
+                last_infer_ts = now
+
+            shown = _draw_tilt_overlay(frame, last_result)
+            cv2.imshow(window, shown)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            if key == ord("s"):
+                # 用当前帧作为新模板，便于现场校准后立刻对比
+                gray, _ = pose_core.preprocess_pair(frame, frame, max_side=skill.max_side)
+                skill._reference_bgr = frame.copy()
+                skill._reference_gray = gray
+                skill._tilt_streak = 0
+                skill.reference_image_url = "<live_frame>"
+                print("已用当前帧更新校准模板")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    # 默认双图测试；第一个参数为 video / test_video 时走本机摄像头
+    if len(sys.argv) > 1 and sys.argv[1] in {"video", "test_video", "--video"}:
+        sys.argv.pop(1)
+        test_video()
+    else:
+        test_image()
