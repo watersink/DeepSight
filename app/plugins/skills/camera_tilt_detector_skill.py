@@ -1,7 +1,7 @@
 """
 摄像头角度偏离检测技能
 
-运行模式 snapshot：由巡检调度定时 ZLM 截图后调用 detect_frame。
+运行模式 stream：接入实时视频流水线，按检测间隔对当前帧调用 detect_frame。
 与 camera_shift_detector 共用 camera_pose_core（模板 + 特征 + H）；
 本技能只判转角 / 透视超阈，不报位置平移。
 校准模板由外部提供（URL/路径）。
@@ -41,11 +41,11 @@ class CameraTiltDetectorSkill(BaseSkill):
         "version": "1.0",
         "cover_image": "/skills/camera_tilt_detector.png",
         "description": (
-            "基于外部校准模板与 ZLM 周期截图，通过特征匹配与单应矩阵估计画面转角与透视变化，"
+            "基于外部校准模板与实时视频帧，通过特征匹配与单应矩阵估计画面转角与透视变化，"
             "检测摄像头角度偏离。与位置挪移技能共用几何核心，可独立部署。"
         ),
         "status": True,
-        "run_mode": "snapshot",
+        "run_mode": "stream",
         "required_models": [],
         "form_fields": [
             {
@@ -55,14 +55,6 @@ class CameraTiltDetectorSkill(BaseSkill):
                 "required": True,
                 "default": "",
                 "hint": "外部提供的模板图 URL 或服务器本地路径（可与挪移技能共用）",
-            },
-            {
-                "key": "check_interval_sec",
-                "label": "检测间隔（秒）",
-                "type": "number",
-                "required": True,
-                "default": 5,
-                "hint": "每隔多少秒向 ZLM 截图并识别一次",
             },
             {
                 "key": "tilt_threshold_deg",
@@ -159,6 +151,7 @@ class CameraTiltDetectorSkill(BaseSkill):
         self._tilt_streak = 0
         self._last_alert_ts = 0.0
         self._last_result: Dict[str, Any] = {}
+        self._last_infer_ts = 0.0
 
         if self.reference_image_url:
             try:
@@ -270,7 +263,7 @@ class CameraTiltDetectorSkill(BaseSkill):
 
         result = {
             "skill_name": self.config.get("name") or "camera_tilt_detector",
-            "run_mode": "snapshot",
+            "run_mode": "stream",
             "status": status,
             "message": pose.message,
             "shift_px": round(float(pose.shift_px), 2),
@@ -294,6 +287,7 @@ class CameraTiltDetectorSkill(BaseSkill):
         return result
 
     def process(self, input_data: Any, context: Any = None, **kwargs) -> SkillResult:
+        """实时视频帧入口：按 check_interval_sec 节流后调用 detect_frame。"""
         try:
             if isinstance(input_data, dict):
                 image = input_data.get("image")
@@ -301,7 +295,14 @@ class CameraTiltDetectorSkill(BaseSkill):
                 image = input_data
             if image is None:
                 return SkillResult.error_result("缺少图像")
+            now = time.time()
+            if (
+                self._last_result
+                and now - self._last_infer_ts < self.check_interval_sec
+            ):
+                return SkillResult.success_result(self._last_result)
             data = self.detect_frame(image)
+            self._last_infer_ts = now
             return SkillResult.success_result(data)
         except Exception as e:
             logger.exception("角度偏离检测失败")

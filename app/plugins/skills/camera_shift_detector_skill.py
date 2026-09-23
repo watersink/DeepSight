@@ -1,7 +1,7 @@
 """
 摄像头位置挪移检测技能
 
-运行模式 snapshot：由巡检调度定时 ZLM 截图后调用 detect_frame。
+运行模式 stream：接入实时视频流水线，按检测间隔对当前帧调用 detect_frame。
 校准模板由外部提供（URL/路径），不做现场多帧融合校准。
 """
 from __future__ import annotations
@@ -38,11 +38,11 @@ class CameraShiftDetectorSkill(BaseSkill):
         "version": "1.0",
         "cover_image": "/skills/camera_shift_detector.png",
         "description": (
-            "基于外部校准模板与 ZLM 周期截图，通过特征匹配与单应矩阵估计画面平移，"
-            "检测摄像头位置挪移。不占用实时解码流水线。"
+            "基于外部校准模板与实时视频帧，通过特征匹配与单应矩阵估计画面平移，"
+            "检测摄像头位置挪移。"
         ),
         "status": True,
-        "run_mode": "snapshot",
+        "run_mode": "stream",
         "required_models": [],
         "form_fields": [
             {
@@ -52,14 +52,6 @@ class CameraShiftDetectorSkill(BaseSkill):
                 "required": True,
                 "default": "",
                 "hint": "外部提供的模板图 URL 或服务器本地路径",
-            },
-            {
-                "key": "check_interval_sec",
-                "label": "检测间隔（秒）",
-                "type": "number",
-                "required": True,
-                "default": 5,
-                "hint": "每隔多少秒向 ZLM 截图并识别一次",
             },
             {
                 "key": "shift_threshold_px",
@@ -141,6 +133,7 @@ class CameraShiftDetectorSkill(BaseSkill):
         self._shift_streak = 0
         self._last_alert_ts = 0.0
         self._last_result: Dict[str, Any] = {}
+        self._last_infer_ts = 0.0
 
         if self.reference_image_url:
             try:
@@ -235,7 +228,7 @@ class CameraShiftDetectorSkill(BaseSkill):
 
         result = {
             "skill_name": self.config.get("name") or "camera_shift_detector",
-            "run_mode": "snapshot",
+            "run_mode": "stream",
             "status": status,
             "message": pose.message,
             "shift_px": round(float(pose.shift_px), 2),
@@ -255,7 +248,7 @@ class CameraShiftDetectorSkill(BaseSkill):
         return result
 
     def process(self, input_data: Any, context: Any = None, **kwargs) -> SkillResult:
-        """兼容帧管道：若被误绑到 stream，也可对单帧检测（仍受模板约束）。"""
+        """实时视频帧入口：按 check_interval_sec 节流后调用 detect_frame。"""
         try:
             if isinstance(input_data, dict):
                 image = input_data.get("image")
@@ -263,7 +256,14 @@ class CameraShiftDetectorSkill(BaseSkill):
                 image = input_data
             if image is None:
                 return SkillResult.error_result("缺少图像")
+            now = time.time()
+            if (
+                self._last_result
+                and now - self._last_infer_ts < self.check_interval_sec
+            ):
+                return SkillResult.success_result(self._last_result)
             data = self.detect_frame(image)
+            self._last_infer_ts = now
             return SkillResult.success_result(data)
         except Exception as e:
             logger.exception("位置挪移检测失败")

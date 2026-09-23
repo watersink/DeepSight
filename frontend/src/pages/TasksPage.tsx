@@ -96,6 +96,11 @@ function skillRunMode(skills: any[], skillName: string): "stream" | "snapshot" {
   return mode === "snapshot" ? "snapshot" : "stream";
 }
 
+/** 需要校准模板的技能（挪移/角度/过暗等），与 run_mode 无关 */
+function skillNeedsReferenceTemplate(skills: any[], skillName: string): boolean {
+  return !!findFormField(skillFormFields(skills, skillName), "reference_image_url");
+}
+
 function skillSupportsTracking(skills: any[], skillName: string) {
   if (skillRunMode(skills, skillName) === "snapshot") return false;
   const s = skills.find((x) => x.skill_name === skillName);
@@ -574,11 +579,6 @@ export default function TasksPage() {
             throw new Error(`技能「${label}」必须配置 ${f.label || "校准模板"}`);
           }
         }
-        if (skillRunMode(skills, s.skill_name) === "snapshot") {
-          if (!(Number(s.check_interval_sec) > 0)) {
-            throw new Error(`技能「${label}」检测间隔须大于 0`);
-          }
-        }
       }
 
       const schedule = {
@@ -634,7 +634,10 @@ export default function TasksPage() {
             tracking_algorithm: s.tracking_algorithm || "sort",
           };
         }
-        if (skillRunMode(skills, s.skill_name) === "snapshot") {
+        if (
+          skillRunMode(skills, s.skill_name) === "snapshot" ||
+          skillNeedsReferenceTemplate(skills, s.skill_name)
+        ) {
           const prevExtra =
             (algoBody.extra_params as Record<string, unknown>) ||
             (isCurrentTask && s.algorithm_config_id
@@ -721,8 +724,7 @@ export default function TasksPage() {
         <div>
           <h1>任务配置</h1>
           <p>
-            同一摄像头多技能共用一路解码（进程内 fan-out）；周期截图类技能由本机定时
-            ZLM 截图识别。列表中仍按技能分条启停。
+            同一摄像头多技能共用一路解码（进程内 fan-out）；挪移/角度/过暗等技能在实时视频中识别，仍需配置校准模板。
           </p>
         </div>
         <div className="toolbar">
@@ -1110,7 +1112,15 @@ export default function TasksPage() {
                 )}
                 {formHasSnapshot && (
                   <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
-                    周期截图技能按「检测间隔」调用 ZLM 截图识别，不占用实时解码 Worker；请预先提供校准模板图片地址。
+                    周期截图技能由本机定时 ZLM 截图识别，不占用实时解码 Worker；请预先提供校准模板图片地址。
+                  </p>
+                )}
+                {form.skills.some((s) =>
+                  skillNeedsReferenceTemplate(skills, s.skill_name)
+                ) &&
+                  !formHasSnapshot && (
+                  <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
+                    挪移/角度/过暗等技能走实时视频 Worker；请预先提供校准模板图片地址。
                   </p>
                 )}
 
@@ -1290,7 +1300,9 @@ export default function TasksPage() {
                                 {opt.name_zh || opt.skill_name}
                                 {String(opt.run_mode || "") === "snapshot"
                                   ? " · 截图"
-                                  : ""}
+                                  : skillNeedsReferenceTemplate(skills, opt.skill_name)
+                                    ? " · 实时+模板"
+                                    : ""}
                               </option>
                             ))}
                             {!selectableSkills.length && (
@@ -1298,7 +1310,8 @@ export default function TasksPage() {
                             )}
                           </select>
                         </label>
-                        {mode === "snapshot" && (
+                        {(mode === "snapshot" ||
+                          skillNeedsReferenceTemplate(skills, s.skill_name)) && (
                           <>
                             <div className="form-field full">
                               校准模板图片 *
@@ -1364,20 +1377,6 @@ export default function TasksPage() {
                                 支持直接填写地址，或上传本地 png / jpg / webp / bmp（≤8MB）
                               </span>
                             </div>
-                            <label>
-                              检测间隔（秒） *
-                              <input
-                                type="number"
-                                min={1}
-                                required
-                                value={s.check_interval_sec}
-                                onChange={(e) =>
-                                  updateSkill(s.key, {
-                                    check_interval_sec: Number(e.target.value),
-                                  })
-                                }
-                              />
-                            </label>
                             {findFormField(fields, "shift_threshold_px") && (
                               <label>
                                 平移告警阈值（像素）
@@ -1451,6 +1450,7 @@ export default function TasksPage() {
                                 }
                               />
                             </label>
+                            {findFormField(fields, "ssim_skip_threshold") && (
                             <label>
                               SSIM 跳过阈值
                               <input
@@ -1466,47 +1466,9 @@ export default function TasksPage() {
                                 }
                               />
                             </label>
+                            )}
                           </>
                         )}
-                        {skillSupportsTracking(skills, s.skill_name) && (
-                          <label>
-                            启用跟踪
-                            <select
-                              value={s.enable_tracking ? "1" : "0"}
-                              onChange={(e) =>
-                                updateSkill(s.key, {
-                                  enable_tracking: e.target.value === "1",
-                                })
-                              }
-                            >
-                              <option value="0">不启用</option>
-                              <option value="1">启用</option>
-                            </select>
-                          </label>
-                        )}
-                        {skillSupportsTracking(skills, s.skill_name) &&
-                          s.enable_tracking && (
-                            <label>
-                              跟踪算法
-                              <select
-                                value={s.tracking_algorithm}
-                                onChange={(e) =>
-                                  updateSkill(s.key, {
-                                    tracking_algorithm: e.target.value,
-                                  })
-                                }
-                              >
-                                {trackingDefaults(
-                                  skills,
-                                  s.skill_name
-                                ).algorithmOptions.map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label || opt.value}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          )}
                         {gateField && (
                           <label>
                             {gateField.label || "方向"}

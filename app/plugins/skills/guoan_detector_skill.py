@@ -525,9 +525,9 @@ def _parse_roi(raw: Any, default: Tuple[float, float, float, float]) -> Tuple[fl
 
 class GuoanDetectorSkill(BaseSkill):
     """
-    画面过暗检测技能（周期截图）
+    画面过暗检测技能（实时视频流）
 
-    校准模板由外部上传/填写；巡检按间隔从 ZLM 截图，比较亮度特征。
+    校准模板由外部上传/填写；在实时视频中按间隔比较亮度特征。
     """
 
     DEFAULT_CONFIG = {
@@ -537,11 +537,11 @@ class GuoanDetectorSkill(BaseSkill):
         "version": "1.0",
         "cover_image": f"/skills/{SKILL_NAME}.png",
         "description": (
-            "基于上传的校准模板照片与 ZLM 周期截图，比较 ROI 中位数、暗像素比、"
-            "分块变暗与曝光水平；连续确认过暗后告警。不占用实时解码流水线。"
+            "基于上传的校准模板照片与实时视频帧，比较 ROI 中位数、暗像素比、"
+            "分块变暗与曝光水平；连续确认过暗后告警。"
         ),
         "status": True,
-        "run_mode": "snapshot",
+        "run_mode": "stream",
         "required_models": [],
         "form_fields": [
             {
@@ -551,14 +551,6 @@ class GuoanDetectorSkill(BaseSkill):
                 "required": True,
                 "default": "",
                 "hint": "正常亮度画面的模板图 URL 或服务器本地路径，也可在任务配置中上传",
-            },
-            {
-                "key": "check_interval_sec",
-                "label": "检测间隔（秒）",
-                "type": "number",
-                "required": True,
-                "default": 5,
-                "hint": "每隔多少秒向 ZLM 截图并识别一次",
             },
             {
                 "key": "confirm_count",
@@ -699,14 +691,17 @@ class GuoanDetectorSkill(BaseSkill):
         assert self._detector is not None
         return self._detector
 
-    def detect_frame(self, current_bgr: np.ndarray) -> Dict[str, Any]:
-        """对单张 BGR 截图做过暗检测（snapshot 巡检入口）。"""
+    def detect_frame(
+        self, current_bgr: np.ndarray, *, dt: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """对单张 BGR 帧做过暗检测（实时视频 / 离线测试入口）。"""
         self.ensure_reference()
         roi = self._resolve_roi(current_bgr, None, None)
         self.feature_cfg.roi = roi
         self._last_roi = roi
         current = extract_features(current_bgr, self.feature_cfg)
-        state = self._detector.update(current, dt=self.check_interval_sec)
+        step = float(dt) if dt is not None and dt > 0 else self.check_interval_sec
+        state = self._detector.update(current, dt=step)
 
         now = time.time()
         prev_status = self._last_status
@@ -722,7 +717,7 @@ class GuoanDetectorSkill(BaseSkill):
             self._last_status = state.status
 
         result = self._build_result(state, current, has_dark_alarm, has_status_change)
-        result["run_mode"] = "snapshot"
+        result["run_mode"] = "stream"
         self._last_result = result
         return result
 
@@ -904,7 +899,20 @@ class GuoanDetectorSkill(BaseSkill):
             if input_roi is not None or fence_config is not None:
                 self.feature_cfg.roi = self._resolve_roi(image, fence_config, input_roi)
                 self._last_roi = self.feature_cfg.roi
-            data = self.detect_frame(image)
+
+            now = time.time()
+            if (
+                self._last_result
+                and self._last_process_ts is not None
+                and now - self._last_process_ts < self.check_interval_sec
+            ):
+                return SkillResult.success_result(self._last_result)
+
+            dt = self.check_interval_sec
+            if self._last_process_ts is not None:
+                dt = max(0.01, now - self._last_process_ts)
+            data = self.detect_frame(image, dt=dt)
+            self._last_process_ts = now
             return SkillResult.success_result(data)
         except Exception as e:
             logger.exception(f"过暗检测技能处理失败: {str(e)}")
