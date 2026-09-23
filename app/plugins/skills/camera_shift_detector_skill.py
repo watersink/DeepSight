@@ -18,6 +18,7 @@ if str(_CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(_CODE_ROOT))
 
 import numpy as np
+import cv2
 
 from app.services import camera_pose_core as pose_core
 from app.skills.skill_base import BaseSkill, SkillResult
@@ -72,7 +73,7 @@ class CameraShiftDetectorSkill(BaseSkill):
                 "label": "告警冷却（秒）",
                 "type": "number",
                 "required": False,
-                "default": 60,
+                "default": 5,
             },
             {
                 "key": "ssim_skip_threshold",
@@ -270,32 +271,91 @@ class CameraShiftDetectorSkill(BaseSkill):
             return SkillResult.error_result(str(e))
 
 
-def main() -> None:
-    """本地双图测试：模板图 + 测试图 → 输出挪移检测结果。
+def _ascii_only(text: Any, *, fallback: str = "") -> str:
+    """OpenCV putText 无法可靠显示中文，仅保留可打印 ASCII。"""
+    raw = str(text if text is not None else "")
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in raw)
+    cleaned = " ".join(cleaned.split())
+    return cleaned or fallback
+
+
+def _draw_shift_overlay(frame: np.ndarray, result: Dict[str, Any]) -> np.ndarray:
+    """把位置挪移检测结果画到画面上（仅英文，避免 OpenCV 中文乱码）。"""
+    status = _ascii_only(result.get("status"), fallback="unknown")
+    if status in {"shift", "fail"} or result.get("has_camera_shift"):
+        color = (0, 0, 255)
+    elif status in {"shift_pending", "shift_cooldown"}:
+        color = (0, 165, 255)
+    elif status in {"normal", "skip"}:
+        color = (0, 200, 0)
+    else:
+        color = (200, 200, 200)
+
+    msg = _ascii_only(result.get("message"))
+    lines = [
+        f"status: {status}",
+        f"shift_px: {result.get('shift_px')}",
+        f"threshold_px: {result.get('shift_threshold_px')}",
+        f"ssim: {result.get('ssim')}",
+        f"match/inlier: {result.get('match_count')} / {result.get('inlier_ratio')}",
+        f"streak: {result.get('shift_streak')}  alert: {result.get('has_camera_shift')}",
+    ]
+    if msg:
+        lines.append(f"msg: {msg}")
+
+    overlay = frame.copy()
+    box_h = 28 + 22 * len(lines)
+    cv2.rectangle(overlay, (8, 8), (min(frame.shape[1] - 8, 720), box_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+
+    y = 30
+    for line in lines:
+        cv2.putText(
+            frame,
+            line[:90],
+            (16, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+        y += 22
+    return frame
+
+
+def test_image() -> None:
+    """本地双图测试：模板图 + 测试图 → 输出位置挪移检测结果。
+
+    默认:
+      模板图 = test_images_videos/mobangtu.png
+      测试图 = test_images_videos/camera-angle-deviation.png
 
     用法:
-      python -m app.plugins.skills.camera_shift_detector_skill \\
-          --ref template.jpg --cur test.jpg
+      python app/plugins/skills/camera_shift_detector_skill.py
+      python app/plugins/skills/camera_shift_detector_skill.py --ref a.png --cur b.png
     """
     import argparse
     import json
-    import sys
     from copy import deepcopy
+
+    default_ref = str(_CODE_ROOT / "test_images_videos" / "mobangtu.png")
+    default_cur = str(_CODE_ROOT / "test_images_videos" / "camera-shift.png")
 
     parser = argparse.ArgumentParser(description="摄像头位置挪移检测（双图离线测试）")
     parser.add_argument(
         "--ref",
         "--reference",
         dest="reference",
-        required=True,
-        help="校准模板图路径或 URL",
+        default=default_ref,
+        help=f"校准模板图路径或 URL（默认: {default_ref}）",
     )
     parser.add_argument(
         "--cur",
         "--current",
         dest="current",
-        required=True,
-        help="待检测图路径或 URL",
+        default=default_cur,
+        help=f"待检测图路径或 URL（默认: {default_cur}）",
     )
     parser.add_argument(
         "--shift-threshold-px",
@@ -336,5 +396,193 @@ def main() -> None:
     sys.exit(0 if result.get("status") != "fail" else 1)
 
 
+def test_video() -> None:
+    """本机摄像头或本地视频文件测试位置挪移算法，结果叠加显示在画面上。
+
+    默认用视频第一帧作为校准模板；可用 --ref 指定外部模板。
+
+    用法:
+      python app/plugins/skills/camera_shift_detector_skill.py video
+      python app/plugins/skills/camera_shift_detector_skill.py video --camera 0
+      python app/plugins/skills/camera_shift_detector_skill.py video --source ./test.mp4
+      python app/plugins/skills/camera_shift_detector_skill.py video --source ./test.mp4 --loop
+
+    按键: q 退出；s 把当前帧设为新模板。
+    """
+    import argparse
+    from copy import deepcopy
+
+    default_source = str(_CODE_ROOT / "test_images_videos" / "person_gouzi.mp4")
+
+    parser = argparse.ArgumentParser(
+        description="摄像头位置挪移检测（本机摄像头 / 本地视频测试）"
+    )
+    parser.add_argument(
+        "--ref",
+        "--reference",
+        dest="reference",
+        default="",
+        help="校准模板图路径或 URL（默认空=使用视频第一帧）",
+    )
+    parser.add_argument(
+        "--source",
+        "--video",
+        dest="source",
+        default="",
+        help=(
+            "本地视频文件路径；指定后优先读文件，不再打开摄像头。"
+            f" 例: {default_source}"
+        ),
+    )
+    parser.add_argument(
+        "--camera",
+        type=int,
+        default=0,
+        help="本机摄像头索引（默认 0；仅在未指定 --source 时生效）",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="本地视频播完后循环（默认播完退出）",
+    )
+    parser.add_argument(
+        "--shift-threshold-px",
+        type=float,
+        default=None,
+        help="平移告警阈值（像素），默认用技能配置",
+    )
+    parser.add_argument(
+        "--confirm-count",
+        type=int,
+        default=1,
+        help="连续确认次数（实时预览默认 1）",
+    )
+    parser.add_argument(
+        "--interval-ms",
+        type=int,
+        default=200,
+        help="检测间隔毫秒（默认 200，减轻本机算力压力）",
+    )
+    args = parser.parse_args()
+
+    config = deepcopy(CameraShiftDetectorSkill.DEFAULT_CONFIG)
+    params = config.setdefault("params", {})
+    params["reference_image_url"] = str(args.reference or "").strip()
+    params["confirm_count"] = max(1, int(args.confirm_count))
+    params["cooldown_sec"] = 0
+    if args.shift_threshold_px is not None:
+        params["shift_threshold_px"] = float(args.shift_threshold_px)
+
+    skill = CameraShiftDetectorSkill(config)
+
+    source = str(args.source or "").strip()
+    if source:
+        video_path = Path(source)
+        if not video_path.is_absolute():
+            video_path = (_CODE_ROOT / video_path).resolve()
+        if not video_path.exists():
+            raise FileNotFoundError(f"本地视频不存在: {video_path}")
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise RuntimeError(f"无法打开本地视频: {video_path}")
+        source_desc = f"file={video_path}"
+    else:
+        # Windows 下 CAP_DSHOW 往往更稳
+        api = cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY
+        cap = cv2.VideoCapture(int(args.camera), api)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(int(args.camera))
+        if not cap.isOpened():
+            raise RuntimeError(f"无法打开本机摄像头 camera={args.camera}")
+        source_desc = f"camera={args.camera}"
+
+    ok, first_frame = cap.read()
+    if not ok or first_frame is None:
+        cap.release()
+        raise RuntimeError("无法读取视频第一帧作为模板")
+
+    if not skill.reference_image_url:
+        gray, _ = pose_core.preprocess_pair(
+            first_frame, first_frame, max_side=skill.max_side
+        )
+        skill._reference_bgr = first_frame.copy()
+        skill._reference_gray = gray
+        skill.reference_image_url = "<first_frame>"
+        print("已用视频第一帧作为校准模板")
+    else:
+        print(f"使用外部校准模板: {skill.reference_image_url}")
+
+    window = "camera_shift_detector"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    last_result: Dict[str, Any] = {"status": "init", "message": "template ready"}
+    last_infer_ts = 0.0
+    interval_sec = max(0.0, float(args.interval_ms) / 1000.0)
+    pending_frame: Optional[np.ndarray] = first_frame
+
+    print(
+        f"实时测试已启动: {source_desc} ref={skill.reference_image_url} "
+        f"interval={args.interval_ms}ms  (q=退出, s=当前帧设为模板"
+        f"{', loop' if source and args.loop else ''})"
+    )
+    try:
+        while True:
+            if pending_frame is not None:
+                frame = pending_frame
+                pending_frame = None
+            else:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    if source and args.loop:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ok, frame = cap.read()
+                        if not ok or frame is None:
+                            print("本地视频循环读取失败，退出")
+                            break
+                        print("本地视频已循环到开头")
+                    else:
+                        print("视频结束或读取失败，退出")
+                        break
+
+            now = time.time()
+            if now - last_infer_ts >= interval_sec:
+                try:
+                    last_result = skill.detect_frame(frame)
+                except Exception as e:
+                    last_result = {
+                        # status: skip/normal/fail/shift_pending/shift/shift_cooldown
+                        "status": "fail",
+                        "message": str(e),
+                        "shift_px": 0.0,
+                        "shift_threshold_px": skill.shift_threshold_px,
+                        "ssim": None,
+                        "match_count": 0,
+                        "inlier_ratio": 0.0,
+                        "shift_streak": 0,
+                        "has_camera_shift": False,
+                    }
+                last_infer_ts = now
+
+            shown = _draw_shift_overlay(frame, last_result)
+            cv2.imshow(window, shown)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            if key == ord("s"):
+                gray, _ = pose_core.preprocess_pair(frame, frame, max_side=skill.max_side)
+                skill._reference_bgr = frame.copy()
+                skill._reference_gray = gray
+                skill._shift_streak = 0
+                skill.reference_image_url = "<live_frame>"
+                print("已用当前帧更新校准模板")
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
+
+
 if __name__ == "__main__":
-    main()
+    # 默认双图测试；第一个参数为 video / test_video 时走本机摄像头
+    if len(sys.argv) > 1 and sys.argv[1] in {"video", "test_video", "--video"}:
+        sys.argv.pop(1)
+        test_video()
+    else:
+        test_image()
