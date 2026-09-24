@@ -272,6 +272,30 @@ class Settings(BaseSettings):
         default=True,
         description="是否推送重要运输设备实时人数到煤安平台",
     )
+    COAL_IMPORT_PERSON_COUNT_FORWARD_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "画面人数检测（person_presence_detector26）结果是否转发到 "
+            "importPersonCount 接口"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_POSITION_CODE: str = Field(
+        default="",
+        description=(
+            "监控点位编码（14 位，参照附录A.1 矿井位置编码）；"
+            "为空时该转发会跳过并记日志（缺必填字段不推送）"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_POSITION_NAME: str = Field(
+        default="",
+        description="监控点位名称；为空时取摄像仪的 position_desc",
+    )
+    COAL_IMPORT_PERSON_COUNT_DIRECTION: str = Field(
+        default="",
+        description=(
+            "出入井方向（01=入井，02=出井）；为空时取摄像仪 analysis_type 映射"
+        ),
+    )
 
     # 煤安平台 OAuth2 客户端凭证（获取 client_token）
     COAL_OAUTH_TOKEN_URL: str = Field(
