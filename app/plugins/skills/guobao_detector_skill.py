@@ -584,7 +584,8 @@ class GuobaoDetectorSkill(BaseSkill):
                 "label": "告警冷却（秒）",
                 "type": "number",
                 "required": False,
-                "default": 60,
+                "default": 5,
+                "hint": "画面持续过曝时，每隔多少秒再写一条报警",
             },
         ],
         "params": {
@@ -593,7 +594,7 @@ class GuobaoDetectorSkill(BaseSkill):
             "reference_image_url": "",
             "check_interval_sec": 2,
             "confirm_count": 3,
-            "cooldown_sec": 60,
+            "cooldown_sec": 5,
             "bright_pixel_threshold": 225,
             "clip_threshold": 250,
             "roi": [0.25, 0.25, 0.5, 0.5],
@@ -648,7 +649,11 @@ class GuobaoDetectorSkill(BaseSkill):
         self.reference_image_url = str(params.get("reference_image_url") or "").strip()
         self.check_interval_sec = max(1.0, float(params.get("check_interval_sec", 2) or 2))
         self.confirm_count = max(1, int(params.get("confirm_count", 3) or 3))
-        self.cooldown_sec = max(0.0, float(params.get("cooldown_sec", 60) or 60))
+        self.cooldown_sec = max(0.0, float(params.get("cooldown_sec", 5) or 5))
+        # 旧任务默认 60 秒，持续 ALARM 时列表里会像只报一条；流模式最长 5 秒重复一次
+        self._repeat_sec = self.cooldown_sec if self.cooldown_sec > 0 else max(1.0, self.check_interval_sec)
+        if self._repeat_sec >= 30:
+            self._repeat_sec = max(5.0, self.check_interval_sec)
         self.alarm_cfg.consecutive_seconds = float(self.confirm_count) * self.check_interval_sec
         self.calibrate_frames = max(1, int(params.get("calibrate_frames", 15) or 15))
         self.sample_fps = float(params.get("sample_fps", 2.0) or 2.0)
@@ -685,7 +690,7 @@ class GuobaoDetectorSkill(BaseSkill):
             "info",
             f"初始化过曝检测: interval={self.check_interval_sec}s "
             f"confirm={self.confirm_count} cooldown={self.cooldown_sec}s "
-            f"roi={self.feature_cfg.roi}",
+            f"repeat={self._repeat_sec}s roi={self.feature_cfg.roi}",
         )
 
     def get_required_models(self) -> List[str]:
@@ -728,14 +733,19 @@ class GuobaoDetectorSkill(BaseSkill):
         now = time.time()
         prev_status = self._last_status
         has_status_change = prev_status is not None and state.status != prev_status
-        rising_alarm = bool(state.alarm and prev_status != "ALARM")
+        # 持续过曝时按 _repeat_sec 重复落库（预览 ALARM 不等于只写第一次）
         has_overexp_alarm = bool(
-            rising_alarm and (now - self._last_alert_ts >= self.cooldown_sec)
+            state.alarm and (now - self._last_alert_ts >= self._repeat_sec)
         )
         if has_overexp_alarm:
             self._last_alert_ts = now
-        if state.status != prev_status:
-            self.log("info", f"过曝检测: {state.status}  {state.message}")
+        if state.status != prev_status or has_overexp_alarm:
+            self.log(
+                "info",
+                f"过曝检测: {state.status} emit={int(has_overexp_alarm)} "
+                f"hold={state.hold_seconds:.1f}s repeat={self._repeat_sec:.1f}s "
+                f"{state.message}",
+            )
             self._last_status = state.status
 
         result = self._build_result(state, current, has_overexp_alarm, has_status_change)
@@ -933,7 +943,9 @@ class GuobaoDetectorSkill(BaseSkill):
                 and self._last_process_ts is not None
                 and now - self._last_process_ts < self.check_interval_sec
             ):
-                return SkillResult.success_result(self._last_result)
+                return SkillResult.success_result(
+                    self._result_without_emit(self._last_result)
+                )
 
             dt = self.check_interval_sec
             if self._last_process_ts is not None:
@@ -944,6 +956,20 @@ class GuobaoDetectorSkill(BaseSkill):
         except Exception as e:
             logger.exception(f"过曝检测技能处理失败: {str(e)}")
             return SkillResult.error_result(f"处理失败: {str(e)}")
+
+    @staticmethod
+    def _result_without_emit(result: Dict[str, Any]) -> Dict[str, Any]:
+        """间隔内复用上一帧画面状态，但不再重复触发落库。"""
+        out = dict(result)
+        out["has_overexp_alarm"] = False
+        out["recognition_types"] = []
+        out["active_alerts"] = []
+        safety = dict(out.get("safety_metrics") or {})
+        alert_info = dict(safety.get("alert_info") or {})
+        alert_info["alert_triggered"] = False
+        safety["alert_info"] = alert_info
+        out["safety_metrics"] = safety
+        return out
 
     def _build_result(
         self,
