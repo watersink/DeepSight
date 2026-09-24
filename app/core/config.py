@@ -181,6 +181,98 @@ class Settings(BaseSettings):
         description="是否在摄像头创建/更新后向煤安平台推送配置",
     )
 
+    # 煤安平台：视频质量异常数据推送（POST /coal/mine/ai/videoAnomaly）
+    COAL_VIDEO_ANOMALY_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/videoAnomaly",
+        description="视频质量异常数据推送接口地址",
+    )
+    COAL_VIDEO_ANOMALY_PUSH_TIMEOUT: float = Field(
+        default=30.0,
+        ge=1.0,
+        description="视频质量异常数据推送接口超时（秒，含图片 Base64 提交）",
+    )
+    COAL_VIDEO_ANOMALY_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否推送视频质量异常数据到煤安平台",
+    )
+    COAL_VIDEO_ANOMALY_IMAGE_PREFIX: str = Field(
+        default="coal/video_anomaly",
+        description="视频质量异常证据图片在 MinIO 中的对象名前缀",
+    )
+    COAL_VIDEO_ANOMALY_FORWARD_ENABLED: bool = Field(
+        default=True,
+        description="告警处理时是否把视频质量异常（过暗/挪动等）转发到煤安平台",
+    )
+    COAL_VIDEO_ANOMALY_FORWARD_COOLDOWN: float = Field(
+        default=60.0,
+        ge=0.0,
+        description="同一摄像仪同一异常类型的转发冷却秒数（0=不冷却）",
+    )
+
+    # 煤安平台：摄像仪状态推送（POST /coal/mine/ai/cameraStatus）
+    COAL_CAMERA_STATUS_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/cameraStatus",
+        description="摄像仪状态推送接口地址（在线/离线）",
+    )
+    COAL_CAMERA_STATUS_PUSH_TIMEOUT: float = Field(
+        default=15.0,
+        ge=1.0,
+        description="摄像仪状态推送接口超时（秒）",
+    )
+    COAL_CAMERA_STATUS_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否推送摄像仪状态到煤安平台",
+    )
+
+    # 煤安平台：人员计数识别数据推送（POST /coal/mine/ai/countingRecog）
+    COAL_COUNTING_RECOG_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/countingRecog",
+        description="人员计数识别数据推送接口地址（数组 + 证据图片）",
+    )
+    COAL_COUNTING_RECOG_PUSH_TIMEOUT: float = Field(
+        default=30.0,
+        ge=1.0,
+        description="人员计数识别数据推送接口超时（秒，含图片 Base64 提交）",
+    )
+    COAL_COUNTING_RECOG_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否推送人员计数识别数据到煤安平台",
+    )
+    COAL_COUNTING_RECOG_IMAGE_PREFIX: str = Field(
+        default="coal/counting_recog",
+        description="人员计数识别证据图片在 MinIO 中的对象名前缀",
+    )
+
+    # 煤安平台：井下人数不符数据推送（POST /coal/mine/ai/undergroundCount）
+    COAL_UNDERGROUND_COUNT_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/undergroundCount",
+        description="井下人数不符数据推送接口地址",
+    )
+    COAL_UNDERGROUND_COUNT_PUSH_TIMEOUT: float = Field(
+        default=15.0,
+        ge=1.0,
+        description="井下人数不符数据推送接口超时（秒）",
+    )
+    COAL_UNDERGROUND_COUNT_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否推送井下人数到煤安平台",
+    )
+
+    # 煤安平台：重要运输设备实时人数推送（POST /coal/mine/ai/importPersonCount）
+    COAL_IMPORT_PERSON_COUNT_PUSH_URL: str = Field(
+        default="http://192.168.26.224:8000/coal/mine/ai/importPersonCount",
+        description="重要运输设备实时人数推送接口地址（按 positionCode 全量替换）",
+    )
+    COAL_IMPORT_PERSON_COUNT_PUSH_TIMEOUT: float = Field(
+        default=15.0,
+        ge=1.0,
+        description="重要运输设备实时人数推送接口超时（秒）",
+    )
+    COAL_IMPORT_PERSON_COUNT_PUSH_ENABLED: bool = Field(
+        default=True,
+        description="是否推送重要运输设备实时人数到煤安平台",
+    )
+
     # 煤安平台 OAuth2 客户端凭证（获取 client_token）
     COAL_OAUTH_TOKEN_URL: str = Field(
         default="http://192.168.26.224:8000/coal/oauth2/client_token",

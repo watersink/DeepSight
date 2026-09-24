@@ -1,12 +1,14 @@
 """推流任务默认告警处理"""
+import base64
 import json
 import logging
 import queue
 import re
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -23,6 +25,40 @@ _MINE_CODE_RE = re.compile(r"^\d{12}$")
 _HTTP_UPLOAD_ANALYSIS_TYPES = frozenset({"04", "05", "06", "07"})
 # 各 scene 上次已成功推送 MQ 的 enter_count，用于判断是否变化
 _last_mq_enter_count_by_scene: Dict[str, int] = {}
+
+# ---------------------------------------------------------------------------
+# 视频质量异常转发（煤安平台 ANALYSIS_TYPE=03）
+# ---------------------------------------------------------------------------
+
+# 告警信号 -> 平台 analysisCase 映射。
+# 注意：这里的 "08"/"09" 是本项目内部对 camera_shift/camera_tilt 的识别类型编号，
+# 与煤安平台 videoAnomaly 的 0008=画面抖动 / 0009=分辨率异常 语义不同，
+# 因此不做直译，而是统一映射为 0002=摄像仪挪动。
+VIDEO_ANOMALY_SIGNAL_CASE: Dict[str, Tuple[str, str]] = {
+    "dark": (                            # guoan_detector_skill 输出的 recognition_type
+        "0003",
+        "画面过暗",
+    ),
+    "has_dark_alarm": ("0003", "画面过暗"),
+    "has_camera_shift": ("0002", "摄像仪挪动"),
+    "has_camera_tilt": ("0002", "摄像仪挪动"),
+    "recognition_type:08": ("0002", "摄像仪挪动（角度/位置偏移）"),
+    "recognition_type:09": ("0002", "摄像仪挪动（角度偏离）"),
+}
+
+# 同一 (cameraCode, analysisCase) 的转发冷却秒数（可配），防止告警循环内重复刷平台
+def _video_anomaly_cooldown() -> float:
+    try:
+        return max(
+            float(getattr(settings, "COAL_VIDEO_ANOMALY_FORWARD_COOLDOWN", 60.0) or 0.0),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 60.0
+
+
+# 各 (cameraCode, analysisCase) 上次成功转发时间戳
+_last_video_anomaly_forward_at: Dict[Tuple[str, str], float] = {}
 
 
 def configure_alert_queue(alert_queue) -> None:
@@ -496,6 +532,159 @@ def push_enter_count_to_mq(event: Dict[str, Any]) -> Optional[Dict[str, str]]:
                 pass
 
 
+def _frame_to_jpeg_base64(frame: Any) -> Optional[str]:
+    """把告警帧编码为 JPEG Base64（带 data URL 前缀）。失败返回 None。"""
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        return None
+    try:
+        ok, buf = cv2.imencode(".jpg", frame)
+        if not ok:
+            return None
+        return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode("ascii")
+    except Exception:
+        logger.exception("视频质量异常转发：告警帧 JPEG 编码失败")
+        return None
+
+
+def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """从告警事件里提取视频质量异常 (analysisCase, 中文名)，按 case 去重排序。"""
+    hits: Dict[str, str] = {}
+
+    # ① 布尔信号
+    for flag in ("has_dark_alarm", "has_camera_shift", "has_camera_tilt"):
+        if event.get(flag):
+            case, label = VIDEO_ANOMALY_SIGNAL_CASE[flag]
+            hits.setdefault(case, label)
+
+    # ② recognition_types（如 "dark"）
+    types = event.get("recognition_types")
+    if isinstance(types, list):
+        for t in types:
+            key = str(t or "").strip()
+            if not key:
+                continue
+            if key in VIDEO_ANOMALY_SIGNAL_CASE:
+                case, label = VIDEO_ANOMALY_SIGNAL_CASE[key]
+            elif f"recognition_type:{key}" in VIDEO_ANOMALY_SIGNAL_CASE:
+                case, label = VIDEO_ANOMALY_SIGNAL_CASE[f"recognition_type:{key}"]
+            else:
+                continue
+            hits.setdefault(case, label)
+
+    return sorted(hits.items())
+
+
+def forward_video_anomaly_alerts(
+    event: Dict[str, Any],
+    raw_frame: Any = None,
+    *,
+    scene_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """把告警里的视频质量异常转发到煤安平台 ``POST /mine/ai/videoAnomaly``。
+
+    - 识别类型固定 ``03``，``analysisCase`` 由告警信号映射（见 VIDEO_ANOMALY_SIGNAL_CASE）；
+    - 证据图片取本次告警帧（与告警图片同一帧），为空则 ``localFiles`` 为 ``[]``；
+    - 一次告警可命中多个异常类型，合并为一个 JSON 数组提交；
+    - 有冷却时间，避免告警循环内重复刷平台；
+    - 全部失败只记日志，不影响原有告警流程。
+    """
+    scene = str(scene_id or event.get("scene_id") or "").strip()
+
+    if not bool(getattr(settings, "COAL_VIDEO_ANOMALY_FORWARD_ENABLED", True)):
+        return None
+
+    hits = _detect_video_anomaly_cases(event)
+    if not hits:
+        return None
+
+    mine_code, camera_code = _resolve_mine_camera_codes(event)
+    if not camera_code:
+        logger.warning(
+            "视频质量异常转发：cameraCode 为空，跳过 scene=%s cases=%s",
+            scene,
+            [c for c, _ in hits],
+        )
+        return None
+
+    data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    # 冷却过滤：同一摄像仪同一异常类型在冷却期内不重复转发
+    now = time.time()
+    cooldown = _video_anomaly_cooldown()
+    pending: List[Tuple[str, str]] = []
+    for case, label in hits:
+        last = _last_video_anomaly_forward_at.get((camera_code, case))
+        if cooldown > 0 and last is not None and (now - last) < cooldown:
+            logger.info(
+                "视频质量异常转发：冷却中跳过 scene=%s cameraCode=%s case=%s(%s) 距上次 %.0fs",
+                scene,
+                camera_code,
+                case,
+                label,
+                now - last,
+            )
+            continue
+        pending.append((case, label))
+    if not pending:
+        return None
+
+    # 证据图片：本次告警帧 -> JPEG Base64（同一张图给本条记录所有异常类型）
+    images_base64: List[str] = []
+    image_b64 = _frame_to_jpeg_base64(raw_frame)
+    if image_b64:
+        images_base64 = [image_b64]
+    else:
+        logger.warning(
+            "视频质量异常转发：无可用告警帧，仅推送数据 scene=%s cameraCode=%s",
+            scene,
+            camera_code,
+        )
+
+    records: List[Dict[str, Any]] = [
+        {
+            "cameraCode": camera_code,
+            "analysisCase": case,
+            "dataTime": data_time,
+            "imagesBase64": images_base64,
+            "mineCode": mine_code or None,
+        }
+        for case, _ in pending
+    ]
+
+    logger.info(
+        "视频质量异常转发：准备推送 scene=%s cameraCode=%s mineCode=%s dataTime=%s "
+        "cases=%s images=%s",
+        scene,
+        camera_code,
+        mine_code,
+        data_time,
+        [c for c, _ in pending],
+        len(images_base64),
+    )
+
+    try:
+        from app.services.coal_video_anomaly_push import push_video_anomaly_records
+
+        result = push_video_anomaly_records(records)
+    except Exception:
+        logger.exception(
+            "视频质量异常转发失败 scene=%s cameraCode=%s cases=%s",
+            scene,
+            camera_code,
+            [c for c, _ in pending],
+        )
+        return None
+
+    # 仅成功（平台 code=200）才记录冷却时间；失败允许下次告警重试
+    if result and result.get("code") == 200:
+        for case, _ in pending:
+            _last_video_anomaly_forward_at[(camera_code, case)] = now
+
+    return result
+
+
 def default_alert_handler(data, raw_frame, scene_id):
     event = build_person_count_alert(data, raw_frame, scene_id)
     if not event.get("skill_name"):
@@ -552,6 +741,19 @@ def default_alert_handler(data, raw_frame, scene_id):
             mq_payload.get("cameraCode"),
             mq_payload.get("analysisCase"),
             mq_payload.get("dataTime"),
+        )
+
+    # 视频质量异常（画面过暗/摄像仪挪动等）转发煤安平台 /mine/ai/videoAnomaly
+    # 带本次告警帧作为证据图片；内部有冷却，失败不影响后续流程
+    anomaly_result = forward_video_anomaly_alerts(event, raw_frame, scene_id=scene_id)
+    if anomaly_result:
+        logger.info(
+            "视频质量异常转发结果 scene=%s pushed=%s uploaded=%s code=%s msg=%s",
+            scene_id,
+            anomaly_result.get("pushed"),
+            anomaly_result.get("uploaded"),
+            anomaly_result.get("code"),
+            anomaly_result.get("msg"),
         )
 
     # 写入跨进程队列，供 SSE 订阅端推送告警

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 
@@ -90,6 +90,46 @@ def push_camera_config(camera: Camera) -> Optional[Dict[str, Any]]:
             item.get("cameraCode"),
         )
         return None
+
+
+def build_camera_push_payload(cameras: Iterable[Camera]) -> List[Dict[str, Any]]:
+    """构造待推送的摄像仪基础信息 JSON 数组（不发送）。
+
+    cameraCode 为空的摄像仪会被跳过（接口要求必填）。
+    """
+    payload: List[Dict[str, Any]] = []
+    seen: set = set()
+    for camera in cameras or []:
+        item = build_camera_push_item(camera)
+        code = str(item.get("cameraCode") or "").strip()
+        if not code:
+            logger.warning(
+                "跳过摄像仪基础信息推送：cameraCode 为空 camera_id=%s",
+                getattr(camera, "id", None),
+            )
+            continue
+        if code in seen:
+            logger.warning(
+                "跳过摄像仪基础信息推送：单次请求内 cameraCode=%s 重复，"
+                "按服务端幂等策略仅保留最后一条",
+                code,
+            )
+            payload = [it for it in payload if it.get("cameraCode") != code]
+        seen.add(code)
+        payload.append(item)
+    return payload
+
+
+def dry_run_camera_push(camera: Camera) -> Optional[Dict[str, Any]]:
+    """只构造单台摄像仪的基础信息报文，不发送（用于核对字段/编码）。"""
+    item = build_camera_push_item(camera)
+    if not item.get("cameraCode"):
+        logger.warning(
+            "构造摄像仪基础信息报文失败：cameraCode 为空 camera_id=%s",
+            getattr(camera, "id", None),
+        )
+        return None
+    return item
 
 
 def _post_camera_payload(
