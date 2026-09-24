@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；01/02 与画面人数等为事件
+# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；blur 模糊；01/02 与画面人数等为事件
 ALERT_RECOGNITION_TYPES = frozenset(
-    {"04", "05", "06", "07", "08", "09", "dark", "overexp"}
+    {"04", "05", "06", "07", "08", "09", "dark", "overexp", "blur"}
 )
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
@@ -1473,6 +1473,7 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
             or bool(event.get("has_count_exit_violation"))
             or bool(event.get("has_dark_alarm"))
             or bool(event.get("has_overexp_alarm"))
+            or bool(event.get("has_blur_alarm"))
             or bool(event.get("has_camera_shift"))
             or bool(event.get("has_camera_tilt"))
         )
