@@ -39,7 +39,12 @@ VIDEO_ANOMALY_SIGNAL_CASE: Dict[str, Tuple[str, str]] = {
         "0003",
         "画面过暗",
     ),
+    "overexp": (                         # guobao_detector_skill 输出的 recognition_type
+        "0004",
+        "画面过曝",
+    ),
     "has_dark_alarm": ("0003", "画面过暗"),
+    "has_overexp_alarm": ("0004", "画面过曝"),
     "has_camera_shift": ("0002", "摄像仪挪动"),
     "has_camera_tilt": ("0002", "摄像仪挪动"),
     "recognition_type:08": ("0002", "摄像仪挪动（角度/位置偏移）"),
@@ -205,6 +210,7 @@ def build_person_count_alert(
         "has_bypass_violation": has_bypass_violation,
         "has_count_exit_violation": has_count_exit_violation,
         "has_dark_alarm": bool(data.get("has_dark_alarm")),
+        "has_overexp_alarm": bool(data.get("has_overexp_alarm")),
         "has_camera_shift": bool(data.get("has_camera_shift")),
         "has_camera_tilt": bool(data.get("has_camera_tilt")),
         "recognition_types": recognition_types,
@@ -551,7 +557,7 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
     hits: Dict[str, str] = {}
 
     # ① 布尔信号
-    for flag in ("has_dark_alarm", "has_camera_shift", "has_camera_tilt"):
+    for flag in ("has_dark_alarm", "has_overexp_alarm", "has_camera_shift", "has_camera_tilt"):
         if event.get(flag):
             case, label = VIDEO_ANOMALY_SIGNAL_CASE[flag]
             hits.setdefault(case, label)
