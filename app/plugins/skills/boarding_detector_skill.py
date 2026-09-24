@@ -105,6 +105,12 @@ class BoardingDetectorSkill(BaseSkill):
                     f"当检测到 {AlertThreshold.boardingCount} 人及以上脚点进入车厢内区域时触发。"
                     "建议将电子围栏画在车门内侧车厢区域。"
                 ),
+                "codes": {
+                    "BOARDING": {
+                        "code": "08",
+                        "description": "无轨胶轮车上车点上下车人数",
+                    },
+                },
             }
         ],
     }
@@ -144,6 +150,9 @@ class BoardingDetectorSkill(BaseSkill):
         self.last_vehicle = None
         self.zone_miss = 0
         self._last_logged_boarding_count: Optional[int] = None
+        self.alert_definitions: List[Dict[str, Any]] = list(
+            self.config.get("alert_definitions") or []
+        )
 
         self.log(
             "info",
@@ -156,6 +165,26 @@ class BoardingDetectorSkill(BaseSkill):
 
     def get_required_models(self) -> List[str]:
         return self.required_models
+
+    def _get_alert_definition(self) -> Dict[str, Any]:
+        """解析上车人数识别类型：08=无轨胶轮车上车点上下车人数。"""
+        item = self.alert_definitions[0] if self.alert_definitions else {}
+        codes = item.get("codes") if isinstance(item.get("codes"), dict) else {}
+        code_item = {}
+        if isinstance(codes.get("BOARDING"), dict):
+            code_item = codes["BOARDING"]
+        elif codes:
+            first = next(iter(codes.values()))
+            if isinstance(first, dict):
+                code_item = first
+        return {
+            "key": str(item.get("key") or "boarding_count"),
+            "level": int(item.get("level", 1) or 1),
+            "description": str(
+                code_item.get("description") or item.get("description") or ""
+            ).strip(),
+            "recognition_type": str(code_item.get("code") or "08").strip() or "08",
+        }
 
     def _get_detection_point(self, detection: Dict) -> Optional[Tuple[float, float]]:
         """围栏/车厢判定使用脚底中心点更稳定。"""
@@ -595,6 +624,35 @@ class BoardingDetectorSkill(BaseSkill):
             self._last_logged_boarding_count = current_boarding
 
         safety_metrics = self.analyze_safety(current_boarding, len(persons), zone_source)
+        alert_def = self._get_alert_definition()
+        recognition_type = str(alert_def.get("recognition_type") or "08").strip() or "08"
+        enter_events: List[Dict[str, Any]] = []
+        active_alerts: List[Dict[str, Any]] = []
+        recognition_types: List[str] = []
+        if has_person_count_change:
+            recognition_types = [recognition_type]
+            for i, person in enumerate(boarding_persons):
+                enter_events.append(
+                    {
+                        "track_id": person.get("track_id", i),
+                        "violation_type": "上车",
+                        "alert_key": alert_def.get("key", "boarding_count"),
+                        "alert_level": alert_def.get("level"),
+                        "alert_description": alert_def.get("description"),
+                        "recognition_type": recognition_type,
+                        "current_boarding": current_boarding,
+                    }
+                )
+            active_alerts.append(
+                {
+                    "key": alert_def.get("key", "boarding_count"),
+                    "level": alert_def.get("level"),
+                    "description": alert_def.get("description"),
+                    "recognition_type": recognition_type,
+                    "violation_type": "上车",
+                    "events": enter_events,
+                }
+            )
         return {
             "detections": detections,
             "persons": persons,
@@ -610,7 +668,11 @@ class BoardingDetectorSkill(BaseSkill):
             "safety_metrics": safety_metrics,
             "skill_name": self.config.get("name") or "boarding_detector",
             "has_person_count_change": has_person_count_change,
-            "recognition_types": [],
+            "has_enter_count_change": bool(enter_events),
+            "enter_events": enter_events,
+            "recognition_types": recognition_types,
+            "alert_definitions": list(self.alert_definitions),
+            "active_alerts": active_alerts,
             "flow_metrics": {
                 "current_boarding": current_boarding,
                 "current_person_count": len(persons),

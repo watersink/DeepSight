@@ -92,6 +92,13 @@ DEFAULT_ALERT_LEVELS: List[Dict[str, Any]] = [
         "level": DEFAULT_ALERT_LEVEL,
         "sort_order": 110,
     },
+    {
+        "type_key": "blur",
+        "name_zh": "图像模糊",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 120,
+    },
 ]
 
 
