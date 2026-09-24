@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-09 报警；dark 过暗；01/02 与画面人数等为事件
+# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；01/02 与画面人数等为事件
 ALERT_RECOGNITION_TYPES = frozenset(
     {"04", "05", "06", "07", "08", "09", "dark", "overexp"}
 )
