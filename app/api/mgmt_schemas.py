@@ -106,7 +106,7 @@ class CameraCreate(BaseModel):
     )
     analysis_type: Literal["01", "02", "03"] = Field(
         ...,
-        description="分析类型：01=人员计数（入），02=人员计数（出），03=视频质量检测",
+        description="分析类型：01=人员计数（入），02=人员计数（出），03=视频质量异常",
     )
     data_time: str = Field(
         default="",

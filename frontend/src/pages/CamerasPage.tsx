@@ -119,7 +119,7 @@ function formatDataTime(d = new Date()): string {
 function analysisTypeLabel(code: string): string {
   if (code === "01") return "01 人员计数（入）";
   if (code === "02") return "02 人员计数（出）";
-  if (code === "03") return "03 视频质量检测";
+  if (code === "03") return "03 视频质量异常";
   return code || "—";
 }
 
@@ -1110,7 +1110,7 @@ export default function CamerasPage() {
                 >
                   <option value="01">01 人员计数（入）</option>
                   <option value="02">02 人员计数（出）</option>
-                  <option value="03">03 视频质量检测</option>
+                  <option value="03">03 视频质量异常</option>
                 </select>
               </label>
               <label className="full">
