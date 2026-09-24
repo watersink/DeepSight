@@ -393,11 +393,12 @@ def _post_video_anomaly_payload(
             return client.post(url, json=payload, headers=headers)
 
     try:
-        resp = _do_request(force_token=False)
-        # token 失效时强制刷新再试一次
+        # 每次推送前强制拉取最新 client_token（app.auth.client_token）
+        resp = _do_request(force_token=True)
+        # 若平台仍返回鉴权失败，再强制刷新一次后重试
         if resp.status_code in {401, 403}:
             logger.warning(
-                "视频质量异常推送鉴权失败 status=%s，刷新 token 后重试 count=%s",
+                "视频质量异常推送鉴权失败 status=%s，再次刷新 token 后重试 count=%s",
                 resp.status_code,
                 len(payload),
             )

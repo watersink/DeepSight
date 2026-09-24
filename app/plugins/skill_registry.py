@@ -290,6 +290,7 @@ def merge_skill_config_overrides(
     bypass_line: Optional[Dict[str, Any]] = None,
     mine_code: Optional[str] = None,
     camera_code: Optional[str] = None,
+    analysis_type: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     将请求级可选参数合并进 skill_config.params。
@@ -312,6 +313,8 @@ def merge_skill_config_overrides(
         overrides["mine_code"] = str(mine_code).strip()
     if camera_code is not None:
         overrides["camera_code"] = str(camera_code).strip()
+    if analysis_type is not None:
+        overrides["analysis_type"] = str(analysis_type).strip()
 
     if not overrides:
         return skill_config

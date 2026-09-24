@@ -107,6 +107,8 @@ class CameraShiftDetectorSkill(BaseSkill):
                     "default": {
                         "code": RECOGNITION_CODE,
                         "description": RECOGNITION_DESC,
+                        # 煤安 videoAnomaly analysisCase
+                        "analysis_case": "0002",
                     }
                 },
             }
@@ -216,6 +218,7 @@ class CameraShiftDetectorSkill(BaseSkill):
                             "level": 2,
                             "description": RECOGNITION_DESC,
                             "recognition_type": RECOGNITION_CODE,
+                            "analysis_case": "0002",  # 摄像仪挪动
                             "shift_px": round(pose.shift_px, 2),
                             "ssim": pose.ssim,
                             "inlier_ratio": round(pose.inlier_ratio, 3),

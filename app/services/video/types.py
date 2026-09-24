@@ -31,13 +31,14 @@ class StreamConfig:
 
 
 def default_alert_predicate(data: Dict[str, Any]) -> bool:
-    """默认触发条件：过线计数变化、违规、画面人数变化、过暗/摄像头偏移。"""
+    """默认触发条件：过线计数变化、违规、画面人数变化、过暗/过曝/摄像头偏移。"""
     return bool(
         data.get("has_enter_count_change")
         or data.get("has_bypass_violation")
         or data.get("has_count_exit_violation")
         or data.get("has_person_count_change")
         or data.get("has_dark_alarm")
+        or data.get("has_overexp_alarm")
         or data.get("has_camera_shift")
         or data.get("has_camera_tilt")
     )

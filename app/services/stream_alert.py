@@ -30,24 +30,19 @@ _last_mq_enter_count_by_scene: Dict[str, int] = {}
 # 视频质量异常转发（煤安平台 ANALYSIS_TYPE=03）
 # ---------------------------------------------------------------------------
 
-# 告警信号 -> 平台 analysisCase 映射。
-# 注意：这里的 "08"/"09" 是本项目内部对 camera_shift/camera_tilt 的识别类型编号，
-# 与煤安平台 videoAnomaly 的 0008=画面抖动 / 0009=分辨率异常 语义不同，
-# 因此不做直译，而是统一映射为 0002=摄像仪挪动。
+# 告警信号 -> 平台 analysisCase 映射（煤安 videoAnomaly）。
+# 0001=画面遮挡 0002=摄像仪挪动 0003=画面过暗 0004=画面过曝
+# 0005=图像模糊 0006=画面冻结 0007=视频丢失 0008=画面抖动 0009=分辨率异常
+# 注意：本项目内部 08/09 是挪移/角度识别类型，对应平台 0002（摄像仪挪动），
+# 与平台 0008/0009（抖动/分辨率）语义不同，不可直译。
 VIDEO_ANOMALY_SIGNAL_CASE: Dict[str, Tuple[str, str]] = {
-    "dark": (                            # guoan_detector_skill 输出的 recognition_type
-        "0003",
-        "画面过暗",
-    ),
-    "overexp": (                         # guobao_detector_skill 输出的 recognition_type
-        "0004",
-        "画面过曝",
-    ),
+    "dark": ("0003", "画面过暗"),
     "has_dark_alarm": ("0003", "画面过暗"),
+    "overexp": ("0004", "画面过曝"),
     "has_overexp_alarm": ("0004", "画面过曝"),
     "has_camera_shift": ("0002", "摄像仪挪动"),
     "has_camera_tilt": ("0002", "摄像仪挪动"),
-    "recognition_type:08": ("0002", "摄像仪挪动（角度/位置偏移）"),
+    "recognition_type:08": ("0002", "摄像仪挪动（位置偏移）"),
     "recognition_type:09": ("0002", "摄像仪挪动（角度偏离）"),
 }
 
@@ -113,6 +108,7 @@ def build_person_count_alert(
     gate_direction = str(data.get("gate_direction") or "").strip().upper() or None
     mine_code = str(data.get("mine_code") or "").strip()
     camera_code = str(data.get("camera_code") or "").strip()
+    analysis_type = str(data.get("analysis_type") or "").strip()
     has_enter_count_change = bool(data.get("has_enter_count_change"))
     has_bypass_violation = bool(data.get("has_bypass_violation"))
     has_count_exit_violation = bool(data.get("has_count_exit_violation"))
@@ -132,7 +128,7 @@ def build_person_count_alert(
         recognition_types = sorted(
             {
                 str(e.get("recognition_type"))
-                for e in (enter_events + bypass_events + count_exit_events)
+                for e in (enter_events + bypass_events + count_exit_events + active_alerts)
                 if isinstance(e, dict) and e.get("recognition_type")
             }
         )
@@ -206,6 +202,7 @@ def build_person_count_alert(
         "gate_direction": gate_direction,
         "mine_code": mine_code,
         "camera_code": camera_code,
+        "analysis_type": analysis_type,
         "has_enter_count_change": has_enter_count_change,
         "has_bypass_violation": has_bypass_violation,
         "has_count_exit_violation": has_count_exit_violation,
@@ -246,14 +243,62 @@ def _publish_alert(event: Dict[str, Any]) -> None:
         logger.exception("写入告警推送队列失败")
 
 
-def _resolve_mine_camera_codes(event: Dict[str, Any]) -> Tuple[str, str]:
-    mine_code = str(event.get("mine_code") or "").strip() or str(
-        settings.COUNTING_RECOG_MINE_CODE or ""
-    ).strip()
-    camera_code = str(event.get("camera_code") or "").strip() or str(
-        settings.COUNTING_RECOG_CAMERA_CODE or ""
-    ).strip()
-    return mine_code, camera_code
+def _lookup_camera_by_scene(scene_id: str) -> Optional[Dict[str, str]]:
+    """按 scene_id 从任务配置反查摄像头的 camera_code / mine_code / analysis_type。"""
+    scene = str(scene_id or "").strip()
+    if not scene:
+        return None
+    try:
+        from sqlalchemy import select
+        from sqlalchemy.orm import joinedload
+
+        from app.db import SessionLocal
+        from app.db.models import TaskConfig
+
+        with SessionLocal() as db:
+            row = db.scalars(
+                select(TaskConfig)
+                .options(joinedload(TaskConfig.camera))
+                .where(TaskConfig.scene_id == scene)
+                .order_by(TaskConfig.id.desc())
+            ).first()
+            cam = getattr(row, "camera", None) if row is not None else None
+            if cam is None:
+                return None
+            return {
+                "camera_code": str(getattr(cam, "camera_code", None) or "").strip(),
+                "mine_code": str(getattr(cam, "mine_code", None) or "").strip(),
+                "analysis_type": str(getattr(cam, "analysis_type", None) or "").strip(),
+            }
+    except Exception:
+        logger.exception("按 scene 反查摄像头失败 scene=%s", scene)
+        return None
+
+
+def _resolve_mine_camera_codes(
+    event: Dict[str, Any],
+) -> Tuple[str, str, str]:
+    """解析 mineCode / cameraCode / analysisType。
+
+    优先事件字段（任务启动时从摄像头配置注入），不足时按 scene_id 查库补齐，
+    最后再回退全局默认。
+    """
+    mine_code = str(event.get("mine_code") or "").strip()
+    camera_code = str(event.get("camera_code") or "").strip()
+    analysis_type = str(event.get("analysis_type") or "").strip()
+
+    if not camera_code or not mine_code or not analysis_type:
+        looked = _lookup_camera_by_scene(str(event.get("scene_id") or ""))
+        if looked:
+            camera_code = camera_code or looked.get("camera_code", "")
+            mine_code = mine_code or looked.get("mine_code", "")
+            analysis_type = analysis_type or looked.get("analysis_type", "")
+
+    if not mine_code:
+        mine_code = str(settings.COUNTING_RECOG_MINE_CODE or "").strip()
+    if not camera_code:
+        camera_code = str(settings.COUNTING_RECOG_CAMERA_CODE or "").strip()
+    return mine_code, camera_code, analysis_type
 
 
 def _count_current_frame_violators(event: Dict[str, Any]) -> Dict[str, int]:
@@ -283,7 +328,7 @@ def _count_current_frame_violators(event: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _build_counting_recog_payloads(event: Dict[str, Any]) -> List[Dict[str, str]]:
-    mine_code, camera_code = _resolve_mine_camera_codes(event)
+    mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
     if not mine_code or not _MINE_CODE_RE.match(mine_code):
         logger.warning(
             "跳过识别结果上传：煤矿编码无效 mine_code=%r scene=%s",
@@ -404,7 +449,7 @@ def _build_enter_count_mq_payload(event: Dict[str, Any]) -> Optional[Dict[str, s
 
     analysisCase 取累计 enter_count（4 位补零），与 HTTP 上传的当帧违规人数不同。
     """
-    mine_code, camera_code = _resolve_mine_camera_codes(event)
+    mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
     if not mine_code or not _MINE_CODE_RE.match(mine_code):
         logger.warning(
             "跳过 MQ 推送：煤矿编码无效 mine_code=%r scene=%s",
@@ -557,12 +602,19 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
     hits: Dict[str, str] = {}
 
     # ① 布尔信号
-    for flag in ("has_dark_alarm", "has_overexp_alarm", "has_camera_shift", "has_camera_tilt"):
+    for flag in (
+        "has_dark_alarm",
+        "has_overexp_alarm",
+        "has_camera_shift",
+        "has_camera_tilt",
+    ):
         if event.get(flag):
-            case, label = VIDEO_ANOMALY_SIGNAL_CASE[flag]
-            hits.setdefault(case, label)
+            mapped = VIDEO_ANOMALY_SIGNAL_CASE.get(flag)
+            if mapped:
+                case, label = mapped
+                hits.setdefault(case, label)
 
-    # ② recognition_types（如 "dark"）
+    # ② recognition_types（如 "dark" / "overexp" / "08" / "09"）
     types = event.get("recognition_types")
     if isinstance(types, list):
         for t in types:
@@ -573,6 +625,30 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
                 case, label = VIDEO_ANOMALY_SIGNAL_CASE[key]
             elif f"recognition_type:{key}" in VIDEO_ANOMALY_SIGNAL_CASE:
                 case, label = VIDEO_ANOMALY_SIGNAL_CASE[f"recognition_type:{key}"]
+            else:
+                continue
+            hits.setdefault(case, label)
+
+    # ③ active_alerts 上的 analysis_case / recognition_type
+    alerts = event.get("active_alerts")
+    if isinstance(alerts, list):
+        for item in alerts:
+            if not isinstance(item, dict):
+                continue
+            ac = str(item.get("analysis_case") or "").strip()
+            if ac and len(ac) == 4 and ac.isdigit():
+                hits.setdefault(
+                    ac,
+                    str(item.get("description") or item.get("violation_type") or ac),
+                )
+                continue
+            rt = str(item.get("recognition_type") or "").strip()
+            if not rt:
+                continue
+            if rt in VIDEO_ANOMALY_SIGNAL_CASE:
+                case, label = VIDEO_ANOMALY_SIGNAL_CASE[rt]
+            elif f"recognition_type:{rt}" in VIDEO_ANOMALY_SIGNAL_CASE:
+                case, label = VIDEO_ANOMALY_SIGNAL_CASE[f"recognition_type:{rt}"]
             else:
                 continue
             hits.setdefault(case, label)
@@ -588,8 +664,10 @@ def forward_video_anomaly_alerts(
 ) -> Optional[Dict[str, Any]]:
     """把告警里的视频质量异常转发到煤安平台 ``POST /mine/ai/videoAnomaly``。
 
-    - 识别类型固定 ``03``，``analysisCase`` 由告警信号映射（见 VIDEO_ANOMALY_SIGNAL_CASE）；
-    - 证据图片取本次告警帧（与告警图片同一帧），为空则 ``localFiles`` 为 ``[]``；
+    - ``analysisType`` 优先取摄像头配置（通常为 ``03``），缺省固定 ``03``；
+    - ``cameraCode`` / ``mineCode`` 来自摄像头配置（事件字段或按 scene 反查）；
+    - ``analysisCase`` 由告警信号映射（见 VIDEO_ANOMALY_SIGNAL_CASE）；
+    - 证据图片取本次告警帧（与告警图片同一帧），为空则不传 ``imagesBase64``；
     - 一次告警可命中多个异常类型，合并为一个 JSON 数组提交；
     - 有冷却时间，避免告警循环内重复刷平台；
     - 全部失败只记日志，不影响原有告警流程。
@@ -603,14 +681,27 @@ def forward_video_anomaly_alerts(
     if not hits:
         return None
 
-    mine_code, camera_code = _resolve_mine_camera_codes(event)
+    mine_code, camera_code, analysis_type = _resolve_mine_camera_codes(event)
     if not camera_code:
         logger.warning(
-            "视频质量异常转发：cameraCode 为空，跳过 scene=%s cases=%s",
+            "视频质量异常转发：cameraCode 为空，跳过 scene=%s cases=%s "
+            "（请确认任务关联摄像头已配置摄像仪编码，或重启任务以注入编码）",
             scene,
             [c for c, _ in hits],
         )
         return None
+
+    # 视频质量异常接口识别类型固定 03；若摄像头配置了 analysis_type 则优先采用
+    analysis_type = (analysis_type or "03").strip() or "03"
+    if analysis_type != "03":
+        logger.info(
+            "视频质量异常转发：摄像头 analysis_type=%s，仍按接口要求使用 03 "
+            "scene=%s cameraCode=%s",
+            analysis_type,
+            scene,
+            camera_code,
+        )
+        analysis_type = "03"
 
     data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
@@ -636,7 +727,7 @@ def forward_video_anomaly_alerts(
     if not pending:
         return None
 
-    # 证据图片：本次告警帧 -> JPEG Base64（同一张图给本条记录所有异常类型）
+    # 证据图片：优先告警帧；若无帧则尝试事件里已上传的 pic_url 不再二次编码
     images_base64: List[str] = []
     image_b64 = _frame_to_jpeg_base64(raw_frame)
     if image_b64:
@@ -651,6 +742,7 @@ def forward_video_anomaly_alerts(
     records: List[Dict[str, Any]] = [
         {
             "cameraCode": camera_code,
+            "analysisType": analysis_type,
             "analysisCase": case,
             "dataTime": data_time,
             "imagesBase64": images_base64,
@@ -660,11 +752,12 @@ def forward_video_anomaly_alerts(
     ]
 
     logger.info(
-        "视频质量异常转发：准备推送 scene=%s cameraCode=%s mineCode=%s dataTime=%s "
-        "cases=%s images=%s",
+        "视频质量异常转发：准备推送 scene=%s cameraCode=%s mineCode=%s "
+        "analysisType=%s dataTime=%s cases=%s images=%s",
         scene,
         camera_code,
         mine_code,
+        analysis_type,
         data_time,
         [c for c, _ in pending],
         len(images_base64),

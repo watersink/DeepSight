@@ -43,7 +43,16 @@ function formatAlertCodes(codes: any): string {
       if (v && typeof v === "object") {
         const code = v.code != null ? String(v.code) : "";
         const desc = v.description ? String(v.description) : "";
-        return `${k}${code ? `=${code}` : ""}${desc ? ` ${desc}` : ""}`;
+        const analysisCase = v.analysis_case
+          ? String(v.analysis_case)
+          : "";
+        const parts = [
+          k,
+          code ? `=${code}` : "",
+          desc ? ` ${desc}` : "",
+          analysisCase ? ` · case ${analysisCase}` : "",
+        ];
+        return parts.join("");
       }
       return `${k}=${String(v)}`;
     })
