@@ -21,8 +21,11 @@ logger = logging.getLogger(__name__)
 
 _alert_queue = None
 _MINE_CODE_RE = re.compile(r"^\d{12}$")
-# HTTP 上传仅允许的识别类型（04/05 绕行，06/07 闸机反向翻越）
-_HTTP_UPLOAD_ANALYSIS_TYPES = frozenset({"04", "05", "06", "07"})
+# HTTP 上传仅允许的识别类型（04/05 绕行，06/07 闸机反向翻越，08 胶轮车上下车）
+_HTTP_UPLOAD_ANALYSIS_TYPES = frozenset({"04", "05", "06", "07", "08"})
+_BOARDING_SKILL_NAMES = frozenset(
+    {"boarding_detector", "non_fixed_parking_boarding_detector"}
+)
 # 各 scene 上次已成功推送 MQ 的 enter_count，用于判断是否变化
 _last_mq_enter_count_by_scene: Dict[str, int] = {}
 
@@ -308,12 +311,12 @@ def _count_current_frame_violators(event: Dict[str, Any]) -> Dict[str, int]:
     """
     统计当前帧各 recognition_type 的违规人数。
 
-    仅依据本帧 bypass_events / count_exit_events，按 track_id 去重；
+    仅依据本帧 bypass_events / count_exit_events / enter_events，按 track_id 去重；
     不使用画面总人数 count，也不使用累计 enter_count。
-    对应 04/05（绕行）、06/07（闸机反向翻越）的当次人数。
+    对应 04/05（绕行）、06/07（闸机反向翻越）、08（胶轮车上下车）的当次人数。
     """
     track_ids_by_type: Dict[str, set] = {}
-    for key in ("bypass_events", "count_exit_events"):
+    for key in ("bypass_events", "count_exit_events", "enter_events"):
         items = event.get(key)
         if not isinstance(items, list):
             continue
@@ -366,7 +369,7 @@ def _build_counting_recog_payloads(event: Dict[str, Any]) -> List[Dict[str, str]
         )
         return []
 
-    # 当前帧各类型违规人数（非累计）；仅 04/05/06/07 走 HTTP 上传
+    # 当前帧各类型违规人数（非累计）；04/05/06/07/08 走 HTTP 上传
     violator_counts = _count_current_frame_violators(event)
     payloads: List[Dict[str, str]] = []
     for analysis_type in recognition_types:
@@ -618,12 +621,17 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
                 case, label = mapped
                 hits.setdefault(case, label)
 
+    skill_name = str(event.get("skill_name") or "").strip()
+    skip_shift_codes = skill_name in _BOARDING_SKILL_NAMES
+
     # ② recognition_types（如 "dark" / "overexp" / "08" / "09"）
     types = event.get("recognition_types")
     if isinstance(types, list):
         for t in types:
             key = str(t or "").strip()
             if not key:
+                continue
+            if skip_shift_codes and key in {"08", "09"}:
                 continue
             if key in VIDEO_ANOMALY_SIGNAL_CASE:
                 case, label = VIDEO_ANOMALY_SIGNAL_CASE[key]
@@ -648,6 +656,8 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
                 continue
             rt = str(item.get("recognition_type") or "").strip()
             if not rt:
+                continue
+            if skip_shift_codes and rt in {"08", "09"}:
                 continue
             if rt in VIDEO_ANOMALY_SIGNAL_CASE:
                 case, label = VIDEO_ANOMALY_SIGNAL_CASE[rt]
@@ -802,7 +812,7 @@ def default_alert_handler(data, raw_frame, scene_id):
             )
     logger.info("%s", event["message"])
 
-    # 管理台按类型拆分落库：01/02/画面人数→事件；04-07→报警
+    # 管理台按类型拆分落库：01/02/08 上车人数→事件；04-07→报警
     persisted_rows = []
     try:
         from app.services.mgmt_service import persist_classified_records
@@ -820,7 +830,7 @@ def default_alert_handler(data, raw_frame, scene_id):
         except Exception:
             logger.exception("Webhook 调度失败 scene=%s", scene_id)
 
-    # 将识别结果 POST 到 countingRecog/upload 接口（仅 analysisType=04/05/06/07）
+    # 将识别结果 POST 到 countingRecog/upload 接口（analysisType=04/05/06/07/08）
     payloads = push_counting_recog_upload(event)
     # 同帧可能有多种识别类型（如绕行 04 + 闸机翻越 06），recognition_types 为 ["04","06"]
     # 时会生成多条 payload，每种 analysisType 各一条，故循环分别上传与打印

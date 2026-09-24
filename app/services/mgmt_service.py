@@ -32,12 +32,15 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；blur 模糊；01/02 与画面人数等为事件
+# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；blur 模糊；01/02 与胶轮车 08 上车人数为事件
 ALERT_RECOGNITION_TYPES = frozenset(
     {"04", "05", "06", "07", "08", "09", "dark", "overexp", "blur"}
 )
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
+BOARDING_SKILL_NAMES = frozenset(
+    {"boarding_detector", "non_fixed_parking_boarding_detector"}
+)
 
 _CALIBRATION_IMAGE_TYPES = {
     "image/png": ".png",
@@ -78,6 +81,8 @@ def classify_record_category(
         for t in (recognition_types or [])
         if str(t).strip()
     }
+    if skill_name in BOARDING_SKILL_NAMES:
+        return "event"
     if types & ALERT_RECOGNITION_TYPES:
         return "alert"
     if types & EVENT_RECOGNITION_TYPES:
@@ -264,10 +269,11 @@ def _normalize_camera_mt_fields(data: dict, *, for_create: bool = False) -> dict
     if "analysis_type" in out:
         at = str(out.get("analysis_type") or "").strip()
         if for_create and not at:
-            raise ValueError("分析类型 analysis_type 必填（01/02/03）")
-        if at and at not in {"01", "02", "03"}:
+            raise ValueError("分析类型 analysis_type 必填（01/02/03/08）")
+        if at and at not in {"01", "02", "03", "08"}:
             raise ValueError(
-                "analysis_type 仅支持 01（入）/ 02（出）/ 03（视频质量异常）"
+                "analysis_type 仅支持 01（入）/ 02（出）/ 03（视频质量异常）/"
+                "08（无轨胶轮车上车点上下车人数）"
             )
         out["analysis_type"] = at
     if "data_time" in out or for_create:
@@ -1419,7 +1425,7 @@ def persist_alert_event(event: Dict[str, Any]) -> Optional[AlertRecord]:
 
 def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
     """
-    按识别类型拆分落库：04-07 → 报警；01/02 / 画面人数 → 事件。
+    按识别类型拆分落库：04-07 → 报警；01/02 / 胶轮车 08 上车人数 / 画面人数 → 事件。
     同帧既有过线又有违规时各写一条。
     """
     import copy
@@ -1432,6 +1438,10 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
     )
     alert_types = [t for t in types if t in ALERT_RECOGNITION_TYPES]
     event_types = [t for t in types if t in EVENT_RECOGNITION_TYPES]
+    if skill_name in BOARDING_SKILL_NAMES and "08" in types:
+        alert_types = [t for t in alert_types if t != "08"]
+        if "08" not in event_types:
+            event_types = sorted(event_types + ["08"])
     rows: List[AlertRecord] = []
 
     def _persist_one(
