@@ -619,7 +619,12 @@ class GuobaoDetectorSkill(BaseSkill):
                 "level": 1,
                 "description": "相对本点位基准判定画面过曝，并持续达到设定秒数后触发。",
                 "codes": {
-                    "overexp": {"code": "overexp", "description": "画面过曝"},
+                    "overexp": {
+                        "code": "overexp",
+                        "description": "画面过曝",
+                        # 煤安 videoAnomaly analysisCase
+                        "analysis_case": "0004",
+                    },
                 },
             }
         ],
@@ -967,6 +972,7 @@ class GuobaoDetectorSkill(BaseSkill):
                     "level": int(alert_def.get("level", 1) or 1),
                     "description": state.message,
                     "recognition_type": "overexp",
+                    "analysis_case": "0004",  # 画面过曝
                     "violation_type": "画面过曝",
                     "events": [
                         {

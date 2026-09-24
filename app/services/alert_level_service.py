@@ -78,6 +78,20 @@ DEFAULT_ALERT_LEVELS: List[Dict[str, Any]] = [
         "level": DEFAULT_ALERT_LEVEL,
         "sort_order": 90,
     },
+    {
+        "type_key": "dark",
+        "name_zh": "画面过暗",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 100,
+    },
+    {
+        "type_key": "overexp",
+        "name_zh": "画面过曝",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 110,
+    },
 ]
 
 

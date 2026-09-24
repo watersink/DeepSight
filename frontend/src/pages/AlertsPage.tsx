@@ -24,6 +24,8 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   "07": "出井闸机入闸",
   "08": "摄像头位置挪移",
   "09": "摄像头角度偏离",
+  dark: "画面过暗",
+  overexp: "画面过曝",
 };
 
 const ALERT_TYPE_OPTIONS = [

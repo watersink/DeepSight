@@ -598,7 +598,12 @@ class GuoanDetectorSkill(BaseSkill):
                 "level": 1,
                 "description": "相对本点位基准判定画面过暗，并持续达到设定秒数后触发。",
                 "codes": {
-                    "dark": {"code": "dark", "description": "画面过暗"},
+                    "dark": {
+                        "code": "dark",
+                        "description": "画面过暗",
+                        # 煤安 videoAnomaly analysisCase
+                        "analysis_case": "0003",
+                    },
                 },
             }
         ],
@@ -940,6 +945,7 @@ class GuoanDetectorSkill(BaseSkill):
                     "level": int(alert_def.get("level", 1) or 1),
                     "description": state.message,
                     "recognition_type": "dark",
+                    "analysis_case": "0003",  # 画面过暗
                     "violation_type": "画面过暗",
                     "events": [
                         {

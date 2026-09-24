@@ -100,6 +100,7 @@ class CameraFanoutPipeline:
                 bypass_line=config.get("bypass_line"),
                 mine_code=config.get("mine_code"),
                 camera_code=config.get("camera_code"),
+                analysis_type=config.get("analysis_type"),
             )
             skill = create_skill(skill_name, skill_config)
 

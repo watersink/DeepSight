@@ -33,7 +33,9 @@ CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
 # 识别类型归类：04-09 报警；dark 过暗；01/02 与画面人数等为事件
-ALERT_RECOGNITION_TYPES = frozenset({"04", "05", "06", "07", "08", "09", "dark"})
+ALERT_RECOGNITION_TYPES = frozenset(
+    {"04", "05", "06", "07", "08", "09", "dark", "overexp"}
+)
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
 
@@ -1234,6 +1236,7 @@ def build_stream_payload(row: TaskConfig) -> Dict[str, Any]:
         "gate_direction": algo.gate_direction,
         "mine_code": cam.mine_code or None,
         "camera_code": cam.camera_code or None,
+        "analysis_type": getattr(cam, "analysis_type", None) or None,
         "alert_image_enabled": bool(getattr(row, "alert_image_enabled", True)),
         "alert_video_enabled": bool(getattr(row, "alert_video_enabled", False)),
         "push_annotated_stream": bool(getattr(row, "push_annotated_stream", False)),
@@ -1469,6 +1472,7 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
             bool(event.get("has_bypass_violation"))
             or bool(event.get("has_count_exit_violation"))
             or bool(event.get("has_dark_alarm"))
+            or bool(event.get("has_overexp_alarm"))
             or bool(event.get("has_camera_shift"))
             or bool(event.get("has_camera_tilt"))
         )

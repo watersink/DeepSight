@@ -203,6 +203,13 @@ class AsyncFrameProcessor:
                     skill_name = cfg.get("name") if isinstance(cfg, dict) else None
                     if skill_name:
                         alert_data.setdefault("skill_name", skill_name)
+                    # 任务启动时写入的摄像仪编码 / 煤矿编码 / 分析类型（来自摄像头配置）
+                    params = cfg.get("params") if isinstance(cfg, dict) else None
+                    if isinstance(params, dict):
+                        for key in ("mine_code", "camera_code", "analysis_type"):
+                            val = str(params.get(key) or "").strip()
+                            if val:
+                                alert_data.setdefault(key, val)
                 alert_data["detect_time_ms"] = round(detect_duration * 1000, 2)
                 alert_data["draw_time_ms"] = round(draw_duration * 1000, 2)
                 alert_data["process_time_ms"] = round(process_duration * 1000, 2)
