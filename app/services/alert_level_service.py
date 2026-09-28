@@ -99,6 +99,13 @@ DEFAULT_ALERT_LEVELS: List[Dict[str, Any]] = [
         "level": DEFAULT_ALERT_LEVEL,
         "sort_order": 120,
     },
+    {
+        "type_key": "freeze",
+        "name_zh": "画面冻结",
+        "category": "alert",
+        "level": DEFAULT_ALERT_LEVEL,
+        "sort_order": 125,
+    },
 ]
 
 

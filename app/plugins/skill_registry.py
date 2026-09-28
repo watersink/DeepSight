@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
 from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
+from app.plugins.skills.frame_freeze_detector_skill import FrameFreezeDetectorSkill
 from app.plugins.skills.guoan_detector_skill import GuoanDetectorSkill
 from app.plugins.skills.guobao_detector_skill import GuobaoDetectorSkill
 from app.plugins.skills.mohu_detector_skill import MohuDetectorSkill
@@ -38,6 +39,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     ),
     CameraShiftDetectorSkill.DEFAULT_CONFIG["name"]: CameraShiftDetectorSkill,
     CameraTiltDetectorSkill.DEFAULT_CONFIG["name"]: CameraTiltDetectorSkill,
+    FrameFreezeDetectorSkill.DEFAULT_CONFIG["name"]: FrameFreezeDetectorSkill,
     GuoanDetectorSkill.DEFAULT_CONFIG["name"]: GuoanDetectorSkill,
     GuobaoDetectorSkill.DEFAULT_CONFIG["name"]: GuobaoDetectorSkill,
     MohuDetectorSkill.DEFAULT_CONFIG["name"]: MohuDetectorSkill,
@@ -82,6 +84,11 @@ _PARAM_LABELS: Dict[str, str] = {
     "cooldown_sec": "告警冷却（秒）",
     "ssim_skip_threshold": "SSIM 跳过阈值",
     "ssim_fail_threshold": "SSIM 失效阈值",
+    "mean_abs_diff_threshold": "像素差阈值",
+    "hist_corr_threshold": "直方图相关阈值",
+    "ssim_same_threshold": "SSIM 同帧阈值",
+    "dark_mean_suppress": "过暗抑制均值",
+    "mismatch_tolerance": "差异容错次数",
     "min_match_count": "最少匹配点数",
     "min_inlier_ratio": "最低内点比例",
     "max_side": "处理最长边",

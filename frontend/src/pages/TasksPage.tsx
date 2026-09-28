@@ -34,7 +34,7 @@ type SkillBinding = {
   algorithm_config_id: number | null;
   enable_tracking: boolean;
   tracking_algorithm: string;
-  /** snapshot 模式 */
+  /** snapshot / 模板类 / 冻结类 */
   reference_image_url: string;
   check_interval_sec: number;
   shift_threshold_px: number;
@@ -43,6 +43,9 @@ type SkillBinding = {
   confirm_count: number;
   cooldown_sec: number;
   ssim_skip_threshold: number;
+  mean_abs_diff_threshold: number;
+  hist_corr_threshold: number;
+  ssim_same_threshold: number;
 };
 
 type TaskForm = {
@@ -102,6 +105,14 @@ function skillNeedsReferenceTemplate(skills: any[], skillName: string): boolean 
   return !!findFormField(skillFormFields(skills, skillName), "reference_image_url");
 }
 
+/** 画面冻结等：无需模板，但需保存检测阈值到 extra_params */
+function skillNeedsFreezeParams(skills: any[], skillName: string): boolean {
+  return !!findFormField(
+    skillFormFields(skills, skillName),
+    "mean_abs_diff_threshold"
+  );
+}
+
 function skillSupportsTracking(skills: any[], skillName: string) {
   if (skillRunMode(skills, skillName) === "snapshot") return false;
   const s = skills.find((x) => x.skill_name === skillName);
@@ -154,6 +165,9 @@ function emptySkill(skillName = "person_presence_detector26"): SkillBinding {
     confirm_count: 3,
     cooldown_sec: 60,
     ssim_skip_threshold: 0.92,
+    mean_abs_diff_threshold: 3,
+    hist_corr_threshold: 0.99,
+    ssim_same_threshold: 0.985,
   };
 }
 
@@ -240,6 +254,9 @@ function snapshotDefaults(skills: any[], skillName: string, extra?: any) {
     confirm_count: num("confirm_count", 3),
     cooldown_sec: num("cooldown_sec", 60),
     ssim_skip_threshold: num("ssim_skip_threshold", 0.92),
+    mean_abs_diff_threshold: num("mean_abs_diff_threshold", 3),
+    hist_corr_threshold: num("hist_corr_threshold", 0.99),
+    ssim_same_threshold: num("ssim_same_threshold", 0.985),
   };
 }
 
@@ -710,6 +727,23 @@ export default function TasksPage() {
             confirm_count: Number(s.confirm_count) || 3,
             cooldown_sec: Number(s.cooldown_sec) || 60,
             ssim_skip_threshold: Number(s.ssim_skip_threshold) || 0.92,
+            enable_default_sort_tracking: false,
+          };
+        }
+        if (skillNeedsFreezeParams(skills, s.skill_name)) {
+          const prevExtra =
+            (algoBody.extra_params as Record<string, unknown>) ||
+            (isCurrentTask && s.algorithm_config_id
+              ? algoById.get(s.algorithm_config_id)?.extra_params || {}
+              : {});
+          algoBody.extra_params = {
+            ...prevExtra,
+            check_interval_sec: Number(s.check_interval_sec) || 1,
+            mean_abs_diff_threshold: Number(s.mean_abs_diff_threshold) || 3,
+            hist_corr_threshold: Number(s.hist_corr_threshold) || 0.99,
+            ssim_same_threshold: Number(s.ssim_same_threshold) || 0.985,
+            confirm_count: Number(s.confirm_count) || 5,
+            cooldown_sec: Number(s.cooldown_sec) || 60,
             enable_default_sort_tracking: false,
           };
         }
@@ -1410,7 +1444,9 @@ export default function TasksPage() {
                                   ? " · 截图"
                                   : skillNeedsReferenceTemplate(skills, opt.skill_name)
                                     ? " · 实时+模板"
-                                    : ""}
+                                    : skillNeedsFreezeParams(skills, opt.skill_name)
+                                      ? " · 实时"
+                                      : ""}
                               </option>
                             ))}
                             {!selectableSkills.length && (
@@ -1575,6 +1611,94 @@ export default function TasksPage() {
                               />
                             </label>
                             )}
+                          </>
+                        )}
+                        {skillNeedsFreezeParams(skills, s.skill_name) && (
+                          <>
+                            <label>
+                              采样间隔（秒）
+                              <input
+                                type="number"
+                                min={0.2}
+                                step={0.1}
+                                value={s.check_interval_sec}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    check_interval_sec: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              像素差阈值
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.1}
+                                value={s.mean_abs_diff_threshold}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    mean_abs_diff_threshold: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              直方图相关阈值
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.001}
+                                value={s.hist_corr_threshold}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    hist_corr_threshold: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              SSIM 同帧阈值
+                              <input
+                                type="number"
+                                min={0}
+                                max={1}
+                                step={0.001}
+                                value={s.ssim_same_threshold}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    ssim_same_threshold: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              连续确认次数
+                              <input
+                                type="number"
+                                min={1}
+                                value={s.confirm_count}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    confirm_count: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              告警冷却（秒）
+                              <input
+                                type="number"
+                                min={0}
+                                value={s.cooldown_sec}
+                                onChange={(e) =>
+                                  updateSkill(s.key, {
+                                    cooldown_sec: Number(e.target.value),
+                                  })
+                                }
+                              />
+                            </label>
                           </>
                         )}
                         {gateField && (
