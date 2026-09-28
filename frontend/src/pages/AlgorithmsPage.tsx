@@ -12,6 +12,7 @@ import coverGuoan from "../assets/skills/guoan_detector_skill.png";
 import coverGuobao from "../assets/skills/guobao_detector_skill.png";
 import coverMohu from "../assets/skills/mohu_detector_skill.png";
 import coverZhedang from "../assets/skills/zhedang_detector_skill.png";
+import coverFrameFreeze from "../assets/skills/frame_freeze_detector.png";
 
 const PAGE_SIZE = 12;
 type ViewMode = "list" | "tile";
@@ -29,6 +30,7 @@ const COVER_BY_SKILL: Record<string, string> = {
   guobao_detector_skill: coverGuobao,
   mohu_detector_skill: coverMohu,
   zhedang_detector_skill: coverZhedang,
+  frame_freeze_detector: coverFrameFreeze,
 };
 
 function coverOf(s: any): string {

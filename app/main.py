@@ -32,6 +32,7 @@ from app.api.routes.llm import router as llm_router
 from app.api.routes.skills import router as skills_router
 from app.api.routes.streams import router as streams_router
 from app.api.routes.workers import router as workers_router
+from app.api.routes.open_camera import router as open_camera_router
 from app.api.schemas import HealthResponse
 from app.core.config import settings
 from app.services.alert_hub import alert_hub
@@ -299,6 +300,7 @@ app.include_router(platform_settings_router, prefix=settings.API_V1_STR)
 app.include_router(alert_levels_router, prefix=settings.API_V1_STR)
 app.include_router(llm_router, prefix=settings.API_V1_STR)
 app.include_router(open_api_router)
+app.include_router(open_camera_router, prefix=settings.API_V1_STR)
 
 _DIST = settings.frontend_dist_path
 _INDEX = _DIST / "index.html"

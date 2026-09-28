@@ -10,3 +10,4 @@ ffmpeg -re -stream_loop -1 -i rotate.mp4 -c copy -f flv rtmp://10.1.3.21:1935/li
 ::ffmpeg -re -stream_loop -1 -i mohu.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/mohu
 ::ffmpeg -re -stream_loop -1 -i guobao.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/guobao
 ::ffmpeg -re -stream_loop -1 -i guoan.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/guoan
+::ffmpeg -re -stream_loop -1 -i freeze.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/freeze
