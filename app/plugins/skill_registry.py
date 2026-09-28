@@ -14,6 +14,7 @@ from app.plugins.skills.non_fixed_parking_boarding_detector_skill import (
 from app.plugins.skills.person_count_detector26_skill import PersonCountDetector26Skill
 from app.plugins.skills.person_count_detector_skill import PersonCountDetectorSkill
 from app.plugins.skills.person_presence_detector26_skill import PersonPresenceDetector26Skill
+from app.plugins.skills.zhedang_detector_skill import ZhedangDetectorSkill
 from app.skills.skill_base import BaseSkill
 
 
@@ -40,6 +41,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     GuoanDetectorSkill.DEFAULT_CONFIG["name"]: GuoanDetectorSkill,
     GuobaoDetectorSkill.DEFAULT_CONFIG["name"]: GuobaoDetectorSkill,
     MohuDetectorSkill.DEFAULT_CONFIG["name"]: MohuDetectorSkill,
+    ZhedangDetectorSkill.DEFAULT_CONFIG["name"]: ZhedangDetectorSkill,
 }
 
 
