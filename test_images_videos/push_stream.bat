@@ -6,3 +6,4 @@
 ::ffmpeg -re -stream_loop -1 -i huifengmian.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
 ffmpeg -re -stream_loop -1 -i rotate.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
 ::ffmpeg -re -stream_loop -1 -i nuoyi.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
+::ffmpeg -re -stream_loop -1 -i zhedang.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
