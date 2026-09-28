@@ -45,6 +45,9 @@ def run_camera_ingest_worker(
     if alert_queue is not None:
         configure_alert_queue(alert_queue)
 
+    # 说明：摄像仪状态定时推送（每 5 分钟）在主进程的 APScheduler 中注册
+    # （见 task_scheduler.start_scheduler），此处不再重复启动，避免多进程重复推送。
+
     source_url = ingest_meta.get("source_url") or ingest_meta.get("in_url")
     if not source_url:
         raise ValueError("ingest 缺少 source_url/in_url")

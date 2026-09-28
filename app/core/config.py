@@ -223,6 +223,15 @@ class Settings(BaseSettings):
         default=True,
         description="是否推送摄像仪状态到煤安平台",
     )
+    COAL_CAMERA_STATUS_PERIODIC_ENABLED: bool = Field(
+        default=True,
+        description="是否定时全量推送摄像仪在线状态（ZLM 判在线）",
+    )
+    COAL_CAMERA_STATUS_PERIODIC_INTERVAL: float = Field(
+        default=300.0,
+        ge=30.0,
+        description="摄像仪状态定时推送间隔（秒），默认 300=5 分钟",
+    )
 
     # 煤安平台：人员计数识别数据推送（POST /coal/mine/ai/countingRecog）
     COAL_COUNTING_RECOG_PUSH_URL: str = Field(
@@ -256,6 +265,13 @@ class Settings(BaseSettings):
     COAL_UNDERGROUND_COUNT_PUSH_ENABLED: bool = Field(
         default=True,
         description="是否推送井下人数到煤安平台",
+    )
+    COAL_UNDERGROUND_COUNT_FORWARD_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "是否在告警处理中转发井下人数（人数变化时上报，"
+            "cameraCode 带人数变化的摄像仪）"
+        ),
     )
 
     # 煤安平台：重要运输设备实时人数推送（POST /coal/mine/ai/importPersonCount）

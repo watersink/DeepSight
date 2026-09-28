@@ -208,6 +208,11 @@ def reconcile_scheduled_tasks() -> None:
         logger.exception("时间窗对账扫描失败")
 
 
+def get_scheduler() -> Optional[BackgroundScheduler]:
+    """返回当前 APScheduler 实例（未启动时返回 None）。"""
+    return _scheduler
+
+
 def start_scheduler() -> None:
     global _scheduler
     with _lock:
@@ -229,6 +234,13 @@ def start_scheduler() -> None:
             "APScheduler 已启动：每 %ss 对账任务运行时间窗",
             RECONCILE_SECONDS,
         )
+        # 注册摄像仪状态定时推送（每 5 分钟，见 stream_alert.start_camera_status_timer）
+        try:
+            from app.services.stream_alert import start_camera_status_timer
+
+            start_camera_status_timer()
+        except Exception:
+            logger.exception("注册摄像仪状态定时推送失败")
         # 启动后立即对账一次
         threading.Thread(
             target=reconcile_scheduled_tasks,

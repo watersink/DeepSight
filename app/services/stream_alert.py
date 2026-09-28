@@ -4,6 +4,7 @@ import json
 import logging
 import queue
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -85,8 +86,53 @@ _DIRECTION_IN = "01"
 _DIRECTION_OUT = "02"
 # 摄像仪 analysis_type（01=人员计数入井，02=人员计数出井）-> direction 映射
 _ANALYSIS_TYPE_TO_DIRECTION = {"01": _DIRECTION_IN, "02": _DIRECTION_OUT}
-# 需要转发到 importPersonCount 的技能（画面人数检测）
-_PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
+# 需要转发到 importPersonCount 的技能（画面人数 / 重要运输设备实时人数）
+# 仅纳入 count 语义为「真实人数」的技能；
+# 异常检测类（guoan/guobao/mohu/camera_shift/camera_tilt）的 count 是
+# 「是否告警」的 0/1 标志，不是人数，必须排除，否则会把告警当成 1 人上报。
+_PERSON_COUNT_SKILLS = frozenset(
+    {
+        "person_presence_detector26",   # 画面人数检测
+        "person_count_detector26",      # 人流量/过线计数（count=画面人数）
+        "person_count_detector",        # 旧版人数检测
+        "boarding_detector",            # 无轨胶轮车上下车人数
+        "non_fixed_parking_boarding_detector",  # 非固定停车上下车人数
+    }
+)
+# 技能 -> 人数取值字段（按优先级）
+_SKILL_COUNT_FIELDS: Dict[str, Tuple[str, ...]] = {
+    "person_presence_detector26": ("count",),
+    "person_count_detector26": ("count", "flow_metrics.current_person_count"),
+    "person_count_detector": ("count", "flow_metrics.current_person_count"),
+    "boarding_detector": ("count", "flow_metrics.current_boarding"),
+    "non_fixed_parking_boarding_detector": ("count", "enter_count"),
+}
+# 保留旧名以兼容既有引用
+_PRESENCE_SKILL_NAMES = _PERSON_COUNT_SKILLS
+
+# ---------------------------------------------------------------------------
+# 摄像仪状态转发（煤安平台 POST /mine/ai/cameraStatus，文档 5）
+# ---------------------------------------------------------------------------
+
+_CAMERA_STATUS_OFFLINE = "0"
+_CAMERA_STATUS_ONLINE = "1"
+# 实时转发节流：同一 cameraCode 的状态在此秒数内不重复推送
+_CAMERA_STATUS_FORWARD_MIN_INTERVAL = 60.0
+# 各 cameraCode 上次成功转发状态 (time, status)
+_last_camera_status_forward: Dict[str, Tuple[float, str]] = {}
+# 5 分钟定时全量推送的后台线程
+_camera_status_timer_started = False
+
+# ---------------------------------------------------------------------------
+# 井下人数不符转发（煤安平台 POST /mine/ai/undergroundCount，文档 8）
+# ---------------------------------------------------------------------------
+
+# 参与井下人数上报的技能（count 语义为真实人数的技能）
+_UNDERGROUND_SKILLS = _PERSON_COUNT_SKILLS
+# 各 cameraCode 的最新人数（用于求井下总人数）
+_UNDERGROUND_CAMERA_COUNTS: Dict[str, int] = {}
+# 上次成功上报的井下总人数（仅总人数变化时上报）
+_UNDERGROUND_LAST_TOTAL: Optional[int] = None
 
 
 def configure_alert_queue(alert_queue) -> None:
@@ -935,20 +981,54 @@ def _resolve_position_info(
 #   调用位置：default_alert_handler()
 #   数据来源：画面人数检测技能 person_presence_detector26（personCount 取事件 count）
 # ===========================================================================
+def extract_person_count(event: Dict[str, Any]) -> Optional[int]:
+    """从事件中提取「监控点位实时人数」。
+
+    按技能取对应字段（priority 顺序），避免误用异常检测类技能里
+    「是否告警」的 0/1 count：
+    - person_presence_detector26 / person_count_detector*: ``count``
+      （= 当前画面人数）、``flow_metrics.current_person_count``
+    - boarding_detector / non_fixed_parking_boarding_detector:
+      ``count``（= 当前车上人数）、``flow_metrics.current_boarding``、
+      ``enter_count``
+
+    返回 None 表示该事件没有可用的人数（不推送）。
+    """
+    skill_name = str(event.get("skill_name") or "").strip()
+    fields = _SKILL_COUNT_FIELDS.get(skill_name, ("count",))
+    for field in fields:
+        value: Any = event
+        for part in field.split("."):
+            if not isinstance(value, dict):
+                value = None
+                break
+            value = value.get(part)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def forward_import_person_count(
     event: Dict[str, Any],
     *,
     scene_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """把画面人数检测结果转发到煤安平台 ``POST /mine/ai/importPersonCount``（文档 9）。
+    """把「监控点位实时人数」转发到煤安平台 ``POST /mine/ai/importPersonCount``（文档 9）。
 
-    仅处理画面人数检测技能（``person_presence_detector26``）产生的事件：
-    - ``personCount`` 取当前画面人数（事件 ``count``）；
+    适用于所有 count 语义为「真实人数」的技能（见 ``_PERSON_COUNT_SKILLS``）：
+    - ``personCount`` 由 ``extract_person_count()`` 按技能取对应字段；
     - ``positionName`` / ``positionCode`` / ``direction`` 由 ``_resolve_position_info`` 解析；
     - **positionCode 必须为 14 位数字**，否则跳过并记日志（缺必填字段不推送，
       避免平台按 positionCode 全量替换时把数据挂到错误点位上）；
     - 数据落库后平台经 SSE（事件名 ``importPersonCount``）推给前端；
     - 全部失败只记日志，不影响原有告警流程。
+
+    注意：异常检测类技能（guoan/guobao/mohu/camera_shift/camera_tilt）
+    的 count 是「是否告警」的 0/1 标志，不是人数，已排除，不在此转发。
     """
     scene = str(scene_id or event.get("scene_id") or "").strip()
 
@@ -958,8 +1038,8 @@ def forward_import_person_count(
         return None
 
     skill_name = str(event.get("skill_name") or "").strip()
-    if skill_name not in _PRESENCE_SKILL_NAMES:
-        # 非画面人数检测技能不在此接口转发
+    if skill_name not in _PERSON_COUNT_SKILLS:
+        # 非人数类技能不在此接口转发
         return None
 
     mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
@@ -969,7 +1049,14 @@ def forward_import_person_count(
         )
         return None
 
-    person_count = int(event.get("count", 0) or 0)
+    person_count = extract_person_count(event)
+    if person_count is None:
+        logger.warning(
+            "重要运输设备人数转发：拿不到人数（skill=%s）scene=%s → 跳过",
+            skill_name,
+            scene,
+        )
+        return None
 
     position_name, position_code, direction = _resolve_position_info(
         event, camera_code, scene
@@ -1036,6 +1123,336 @@ def forward_import_person_count(
             person_count,
         )
     return result
+
+
+def collect_and_forward_person_counts(
+    event: Dict[str, Any],
+    *,
+    scene_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """收集本次事件里的「监控点位实时人数」并转发到 importPersonCount（文档 9）。
+
+    与 ``forward_import_person_count`` 等价，但语义上强调「收集多个技能的人数」：
+    从所有 count 语义为真实人数的技能中取出人数，组装成 **JSON 数组**
+    一次提交（同一监控点位可含入井/出井两条，direction 不同、cameraCode 不同）。
+
+    返回平台响应或 None（无可用人数 / 缺必填字段 / 未启用）。
+    """
+    result = forward_import_person_count(event, scene_id=scene_id)
+    if result is None:
+        skill_name = str(event.get("skill_name") or "").strip()
+        if skill_name in _PERSON_COUNT_SKILLS:
+            logger.info(
+                "重要运输设备人数转发：本次无可用人数或缺少必填字段，未推送 "
+                "scene=%s skill=%s count=%s",
+                scene_id or event.get("scene_id"),
+                skill_name,
+                extract_person_count(event),
+            )
+    return result
+
+
+def forward_underground_count(
+    event: Dict[str, Any],
+    *,
+    scene_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """把「井下总人数」转发到煤安平台 ``POST /mine/ai/undergroundCount``（文档 8）。
+
+    聚合语义：
+    - 维护**各摄像仪的最新人数**（``_UNDERGROUND_CAMERA_COUNTS``），
+      每次人数事件都刷新对应摄像仪的值；
+    - ``analysisCase`` = **所有摄像仪人数之和**（井下总人数，4 位补零）；
+    - ``cameraCode`` = **本次检测到人数变化的那台摄像仪**（哪台变化带哪台）；
+    - **仅当总人数发生变化时才推送**（首次推送也发）；
+
+    ``dataTime`` 取事件时间，缺省当前时间；``mineCode`` 由
+    ``_resolve_mine_camera_codes()`` 解析。平台侧处理（本项目只负责推送）：
+    写入 ``mine_underground_count``、调人员定位系统取 ``ps_person_card_count``、
+    按冗余规则产生 ``analysis_type=12`` 报警、SSE（事件名 ``undergroundCount``）。
+    失败只记日志，不影响原有告警流程。
+    """
+    global _UNDERGROUND_LAST_TOTAL
+    scene = str(scene_id or event.get("scene_id") or "").strip()
+
+    if not bool(getattr(settings, "COAL_UNDERGROUND_COUNT_FORWARD_ENABLED", True)):
+        return None
+
+    skill_name = str(event.get("skill_name") or "").strip()
+    if skill_name not in _UNDERGROUND_SKILLS:
+        # 非人数类技能不在此接口转发
+        return None
+
+    mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
+    if not camera_code:
+        logger.warning("井下人数转发：cameraCode 为空，跳过 scene=%s", scene)
+        return None
+
+    person_count = extract_person_count(event)
+    if person_count is None:
+        logger.warning(
+            "井下人数转发：拿不到人数（skill=%s）scene=%s → 跳过", skill_name, scene
+        )
+        return None
+
+    # 刷新本摄像仪人数，并计算井下总人数（各摄像仪之和）
+    prev_camera_count = _UNDERGROUND_CAMERA_COUNTS.get(camera_code)
+    _UNDERGROUND_CAMERA_COUNTS[camera_code] = person_count
+    total_count = sum(_UNDERGROUND_CAMERA_COUNTS.values())
+
+    # 仅总人数发生变化时上报（首次也上报）
+    prev_total = _UNDERGROUND_LAST_TOTAL
+    if prev_total is not None and prev_total == total_count:
+        logger.debug(
+            "井下人数转发：总人数未变化（%s 人），跳过 cameraCode=%s（本机 %s 人）",
+            total_count,
+            camera_code,
+            person_count,
+        )
+        return None
+
+    data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    logger.info(
+        "井下人数转发：准备推送 scene=%s cameraCode=%s（变化来源）"
+        "总人数=%s（上次=%s）本机人数=%s（上次=%s）参与摄像仪=%s mineCode=%s",
+        scene,
+        camera_code,
+        total_count,
+        prev_total,
+        person_count,
+        prev_camera_count,
+        len(_UNDERGROUND_CAMERA_COUNTS),
+        mine_code,
+    )
+
+    try:
+        from app.services.coal_underground_count_push import (
+            push_underground_count_records,
+        )
+
+        result = push_underground_count_records(
+            [
+                {
+                    "cameraCode": camera_code,
+                    "analysisCase": f"{total_count:04d}",
+                    "dataTime": data_time,
+                    "mineCode": mine_code or None,
+                }
+            ]
+        )
+    except Exception:
+        logger.exception(
+            "井下人数转发失败 scene=%s cameraCode=%s total=%s",
+            scene,
+            camera_code,
+            total_count,
+        )
+        return None
+
+    # 仅成功才记录，失败允许下次重试
+    if result and result.get("code") == 200:
+        _UNDERGROUND_LAST_TOTAL = total_count
+        logger.info(
+            "井下人数转发成功 scene=%s cameraCode=%s 总人数=%s（上次=%s）",
+            scene,
+            camera_code,
+            total_count,
+            prev_total,
+        )
+    return result
+
+
+def forward_camera_status(
+    event: Dict[str, Any],
+    camera_status: Any = _CAMERA_STATUS_ONLINE,
+    *,
+    scene_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """把摄像仪在线/离线状态转发到煤安平台 ``POST /mine/ai/cameraStatus``（文档 5）。
+
+    - ``cameraStatus``：``1``=在线，``0``=离线；
+    - ``cameraCode`` / ``mineCode`` 由 ``_resolve_mine_camera_codes()`` 解析；
+    - 同一 cameraCode 在 ``_CAMERA_STATUS_FORWARD_MIN_INTERVAL`` 秒内不重复推送
+      （状态未变化且未超间隔时跳过），避免每条告警都刷平台；
+    - 平台按 ``cameraCode`` 先删除后新增（全量替换），故单次请求内不重复；
+    - 失败只记日志，不影响原有告警流程。
+    """
+    scene = str(scene_id or event.get("scene_id") or "").strip()
+
+    if not bool(getattr(settings, "COAL_CAMERA_STATUS_PUSH_ENABLED", True)):
+        return None
+
+    mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
+    if not camera_code:
+        logger.warning("摄像仪状态转发：cameraCode 为空，跳过 scene=%s", scene)
+        return None
+
+    from app.services.coal_camera_status_push import normalize_camera_status
+
+    status = normalize_camera_status(camera_status)
+    if status is None:
+        logger.warning(
+            "摄像仪状态转发：cameraStatus=%r 非法（应为 0/1）scene=%s cameraCode=%s",
+            camera_status,
+            scene,
+            camera_code,
+        )
+        return None
+
+    # 节流：同状态且在最小间隔内则跳过
+    now = time.time()
+    last = _last_camera_status_forward.get(camera_code)
+    if last is not None:
+        last_at, last_status = last
+        if (
+            last_status == status
+            and (now - last_at) < _CAMERA_STATUS_FORWARD_MIN_INTERVAL
+        ):
+            logger.debug(
+                "摄像仪状态转发：节流跳过 cameraCode=%s status=%s 距上次 %.0fs",
+                camera_code,
+                status,
+                now - last_at,
+            )
+            return None
+
+    data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    logger.info(
+        "摄像仪状态转发：准备推送 scene=%s cameraCode=%s cameraStatus=%s mineCode=%s",
+        scene,
+        camera_code,
+        status,
+        mine_code,
+    )
+
+    try:
+        from app.services.coal_camera_status_push import push_camera_statuses
+
+        result = push_camera_statuses(
+            [
+                {
+                    "cameraCode": camera_code,
+                    "cameraStatus": status,
+                    "dataTime": data_time,
+                    "mineCode": mine_code or None,
+                }
+            ]
+        )
+    except Exception:
+        logger.exception(
+            "摄像仪状态转发失败 scene=%s cameraCode=%s", scene, camera_code
+        )
+        return None
+
+    # 仅成功才记录节流时间；失败允许下次重试
+    if result and result.get("code") == 200:
+        _last_camera_status_forward[camera_code] = (now, status)
+        logger.info(
+            "摄像仪状态转发成功 scene=%s cameraCode=%s status=%s",
+            scene,
+            camera_code,
+            status,
+        )
+    return result
+
+
+def push_all_camera_status_periodic() -> Optional[Dict[str, Any]]:
+    """定时全量推送所有摄像仪在线状态（ZLM 判在线，文档 5）。
+
+    供 5 分钟定时器调用；采集失败返回 None 且不推送。
+    """
+    try:
+        from app.services.coal_camera_status_push import push_all_camera_statuses
+
+        result = push_all_camera_statuses()
+    except Exception:
+        logger.exception("摄像仪状态定时推送异常")
+        return None
+    if result:
+        logger.info(
+            "摄像仪状态定时推送结果 online=%s offline=%s pushed=%s code=%s",
+            result.get("online"),
+            result.get("offline"),
+            result.get("pushed"),
+            result.get("code"),
+        )
+    return result
+
+
+def _camera_status_periodic_loop(interval: float) -> None:
+    """后台线程：每 interval 秒全量推送一次摄像仪状态。"""
+    logger.info("摄像仪状态定时推送线程已启动：每 %.0f 秒一次", interval)
+    while True:
+        time.sleep(max(interval, 30.0))
+        try:
+            push_all_camera_status_periodic()
+        except Exception:
+            logger.exception("摄像仪状态定时推送循环异常")
+
+
+def start_camera_status_timer(interval_seconds: Optional[float] = None) -> bool:
+    """启动摄像仪状态定时推送（默认每 5 分钟）。
+
+    优先注册到项目已有的 APScheduler（``task_scheduler``，主进程）；
+    APScheduler 不可用时回退到本进程后台线程。幂等：重复调用只启动一次。
+
+    注意：ingest 是多进程的，若每个子进程都启线程会重复推送，
+    因此仅建议在主进程（``start_scheduler``）中调用本函数。
+    """
+    global _camera_status_timer_started
+    if _camera_status_timer_started:
+        return False
+    if not bool(getattr(settings, "COAL_CAMERA_STATUS_PERIODIC_ENABLED", True)):
+        logger.info("摄像仪状态定时推送未启用：COAL_CAMERA_STATUS_PERIODIC_ENABLED=false")
+        return False
+
+    if interval_seconds is None:
+        try:
+            interval_seconds = float(
+                getattr(settings, "COAL_CAMERA_STATUS_PERIODIC_INTERVAL", 300.0) or 300.0
+            )
+        except (TypeError, ValueError):
+            interval_seconds = 300.0
+    interval_seconds = max(float(interval_seconds), 30.0)
+
+    # 优先复用项目 APScheduler，避免多进程重复起线程
+    try:
+        from app.services.task_scheduler import get_scheduler
+
+        sched = get_scheduler()
+        if sched is not None and sched.running:
+            sched.add_job(
+                push_all_camera_status_periodic,
+                "interval",
+                seconds=interval_seconds,
+                id="push_camera_status",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            _camera_status_timer_started = True
+            logger.info(
+                "摄像仪状态定时推送已注册到 APScheduler：每 %.0f 秒一次",
+                interval_seconds,
+            )
+            return True
+    except Exception:
+        logger.exception("注册 APScheduler 摄像仪状态任务失败，回退后台线程")
+
+    t = threading.Thread(
+        target=_camera_status_periodic_loop,
+        args=(interval_seconds,),
+        name="camera-status-periodic",
+        daemon=True,
+    )
+    t.start()
+    _camera_status_timer_started = True
+    logger.info("摄像仪状态定时推送线程已启动：每 %.0f 秒一次", interval_seconds)
+    return True
 
 
 def default_alert_handler(data, raw_frame, scene_id):
@@ -1112,24 +1529,66 @@ def default_alert_handler(data, raw_frame, scene_id):
     # 画面人数检测（person_presence_detector26）→ 重要运输设备实时人数
     # POST /mine/ai/importPersonCount；内部校验 positionCode/direction，
     # 缺必填字段时跳过，不影响其他推送
-    presence_result = forward_import_person_count(event, scene_id=scene_id)
-    if presence_result:
+    # ── 监控点位实时人数收集与转发（对接文档 §9）────────────────────────
+    # 从所有 count 语义为「真实人数」的技能（见 _PERSON_COUNT_SKILLS）收集人数，
+    # 组装成 JSON 数组一次提交到 /mine/ai/importPersonCount；
+    # personCount 由 extract_person_count() 按技能取对应字段，
+    # positionName/positionCode/direction 由 _resolve_position_info() 解析，
+    # 缺必填字段（positionCode 需 14 位、direction 需 01/02）则跳过并记日志。
+    # 异常检测类技能（guoan/guobao/mohu/camera_shift/camera_tilt）的 count
+    # 是告警标志而非人数，已在 _PERSON_COUNT_SKILLS 中排除。
+    person_count_result = collect_and_forward_person_counts(event, scene_id=scene_id)
+    if person_count_result:
         logger.info(
-            "重要运输设备人数转发结果 scene=%s pushed=%s code=%s msg=%s",
+            "监控点位实时人数转发结果 scene=%s skill=%s personCount=%s "
+            "pushed=%s code=%s msg=%s",
             scene_id,
-            presence_result.get("pushed"),
-            presence_result.get("code"),
-            presence_result.get("msg"),
+            event.get("skill_name"),
+            extract_person_count(event),
+            person_count_result.get("pushed"),
+            person_count_result.get("code"),
+            person_count_result.get("msg"),
+        )
+
+    # ── 井下人数不符转发（对接文档 §8）────────────────────────────────
+    # 该摄像仪人数发生变化时上报，cameraCode 带人数变化的那台摄像仪；
+    # 平台侧据此与人员定位系统比对并产生 analysis_type=12 报警
+    underground_result = forward_underground_count(event, scene_id=scene_id)
+    if underground_result:
+        logger.info(
+            "井下人数转发结果 scene=%s cameraCode=%s personCount=%s code=%s msg=%s",
+            scene_id,
+            event.get("camera_code"),
+            extract_person_count(event),
+            underground_result.get("code"),
+            underground_result.get("msg"),
+        )
+
+    # ── 摄像仪状态转发（对接文档 §5）────────────────────────────────────
+    # 能产生告警说明该摄像仪在线，实时上报 cameraStatus=1
+    # （同状态 60s 内节流；离线状态由 5 分钟定时全量任务按 ZLM 判定）
+    camera_status_result = forward_camera_status(
+        event, _CAMERA_STATUS_ONLINE, scene_id=scene_id
+    )
+    if camera_status_result:
+        logger.info(
+            "摄像仪状态转发结果 scene=%s cameraCode=%s code=%s msg=%s",
+            scene_id,
+            event.get("camera_code"),
+            camera_status_result.get("code"),
+            camera_status_result.get("msg"),
         )
 
     # 写入跨进程队列，供 SSE 订阅端推送告警
     _publish_alert(event)
     logger.info(
         "告警已写入 SSE 队列 scene=%s type=%s recognition_types=%s "
-        "enter_count=%s time=%s",
+        "skill=%s count=%s enter_count=%s time=%s",
         event.get("scene_id"),
         event.get("type"),
         event.get("recognition_types"),
+        event.get("skill_name"),
+        event.get("count"),
         event.get("enter_count"),
         event.get("time"),
     )
