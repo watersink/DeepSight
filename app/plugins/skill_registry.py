@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
 from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
+from app.plugins.skills.doudong_detector_skill import DoudongDetectorSkill
 from app.plugins.skills.guoan_detector_skill import GuoanDetectorSkill
 from app.plugins.skills.guobao_detector_skill import GuobaoDetectorSkill
 from app.plugins.skills.mohu_detector_skill import MohuDetectorSkill
@@ -42,6 +43,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     GuobaoDetectorSkill.DEFAULT_CONFIG["name"]: GuobaoDetectorSkill,
     MohuDetectorSkill.DEFAULT_CONFIG["name"]: MohuDetectorSkill,
     ZhedangDetectorSkill.DEFAULT_CONFIG["name"]: ZhedangDetectorSkill,
+    DoudongDetectorSkill.DEFAULT_CONFIG["name"]: DoudongDetectorSkill,
 }
 
 

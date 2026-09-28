@@ -41,6 +41,7 @@ def default_alert_predicate(data: Dict[str, Any]) -> bool:
         or data.get("has_overexp_alarm")
         or data.get("has_blur_alarm")
         or data.get("has_zhedang_alarm")
+        or data.get("has_doudong_alarm")
         or data.get("has_camera_shift")
         or data.get("has_camera_tilt")
     )
