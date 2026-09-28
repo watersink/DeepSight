@@ -274,6 +274,22 @@ class Settings(BaseSettings):
         ),
     )
 
+    # 对外取流接口：人员计数流的判定
+    PERSON_COUNT_STREAM_EXTRA: str = Field(
+        default="",
+        description=(
+            "额外视为「人员计数流」的 ZLM 流名（逗号分隔，支持前缀匹配），"
+            "用于兜底：流没有关联人员计数任务但确实是人员计数时填写"
+        ),
+    )
+    PERSON_COUNT_STREAM_REQUIRE_TASK: bool = Field(
+        default=True,
+        description=(
+            "是否必须关联人员计数任务才算人员计数流；"
+            "false 时仅按 PERSON_COUNT_STREAM_EXTRA 前缀匹配"
+        ),
+    )
+
     # 煤安平台：重要运输设备实时人数推送（POST /coal/mine/ai/importPersonCount）
     COAL_IMPORT_PERSON_COUNT_PUSH_URL: str = Field(
         default="http://192.168.26.224:8000/coal/mine/ai/importPersonCount",

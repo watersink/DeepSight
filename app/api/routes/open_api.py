@@ -206,3 +206,37 @@ def open_ack_alert(
         raise HTTPException(status_code=404, detail="告警不存在或无权访问")
     updated = mgmt_svc.update_alert_status(db, row, body.status)
     return AlertOut.model_validate(updated)
+
+
+@router.get(
+    "/camera/play-url",
+    summary="按摄像仪编码获取人员计数流播放地址（FLV / HLS）",
+)
+def open_camera_play_url(
+    db: Annotated[Session, Depends(get_db)],
+    camera_code: str = Query(..., alias="cameraCode", description="摄像仪编码（MT/T 1201.6-2023）"),
+    partner: Annotated[PartnerIntegration, Depends(get_partner_by_api_key)] = None,
+):
+    """返回该摄像仪「人员计数流」的播放地址，供前端播放。
+
+    - 只返回**人员计数**用途的流；其他用途（过暗/挪移/遮挡等）不返回；
+    - 主要字段 ``flvUrl`` / ``hlsUrl`` 可直接给前端播放器（HTTP-FLV / HLS）；
+      ``rtspUrl`` 一并返回备用（浏览器不支持 RTSP）；
+    - **没有人员计数流时返回空**（``streams: []``，``flvUrl`` / ``hlsUrl`` 为 null）；
+    - 同一摄像仪编码可能对应多条流（入井/出井等），全部以 ``streams`` 数组返回。
+    """
+    from app.services import camera_stream_service
+
+    code = str(camera_code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="cameraCode 不能为空")
+
+    streams = camera_stream_service.list_person_count_streams(db, code)
+    first = streams[0] if streams else {}
+    return {
+        "cameraCode": code,
+        "flvUrl": first.get("flvUrl"),
+        "hlsUrl": first.get("hlsUrl"),
+        "rtspUrl": first.get("rtspUrl"),
+        "streams": streams,
+    }
