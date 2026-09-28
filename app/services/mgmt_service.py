@@ -32,9 +32,23 @@ logger = logging.getLogger(__name__)
 CACHE_CAMERAS = "mgmt:cameras:all"
 CACHE_ALGOS = "mgmt:algos:all"
 
-# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；blur 模糊；01/02 与胶轮车 08 上车人数为事件
+# 识别类型归类：04-09 报警；dark 过暗；overexp 过曝；blur 模糊；video_lost 视频丢失；01/02 与胶轮车 08 上车人数为事件
 ALERT_RECOGNITION_TYPES = frozenset(
-    {"04", "05", "06", "07", "08", "09", "dark", "overexp", "blur", "occlusion", "freeze", "shake"}
+    {
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "dark",
+        "overexp",
+        "blur",
+        "occlusion",
+        "freeze",
+        "shake",
+        "video_lost",
+    }
 )
 EVENT_RECOGNITION_TYPES = frozenset({"01", "02"})
 PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
@@ -1499,6 +1513,7 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
             or bool(event.get("has_blur_alarm"))
             or bool(event.get("has_zhedang_alarm"))
             or bool(event.get("has_freeze_alarm"))
+            or bool(event.get("has_video_lost_alarm"))
             or bool(event.get("has_doudong_alarm"))
             or bool(event.get("has_camera_shift"))
             or bool(event.get("has_camera_tilt"))

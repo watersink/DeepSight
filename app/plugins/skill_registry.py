@@ -16,6 +16,7 @@ from app.plugins.skills.non_fixed_parking_boarding_detector_skill import (
 from app.plugins.skills.person_count_detector26_skill import PersonCountDetector26Skill
 from app.plugins.skills.person_count_detector_skill import PersonCountDetectorSkill
 from app.plugins.skills.person_presence_detector26_skill import PersonPresenceDetector26Skill
+from app.plugins.skills.shipinliu_diushi_detector_skill import ShipinliuDiushiDetectorSkill
 from app.plugins.skills.zhedang_detector_skill import ZhedangDetectorSkill
 from app.skills.skill_base import BaseSkill
 
@@ -44,6 +45,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     GuoanDetectorSkill.DEFAULT_CONFIG["name"]: GuoanDetectorSkill,
     GuobaoDetectorSkill.DEFAULT_CONFIG["name"]: GuobaoDetectorSkill,
     MohuDetectorSkill.DEFAULT_CONFIG["name"]: MohuDetectorSkill,
+    ShipinliuDiushiDetectorSkill.DEFAULT_CONFIG["name"]: ShipinliuDiushiDetectorSkill,
     ZhedangDetectorSkill.DEFAULT_CONFIG["name"]: ZhedangDetectorSkill,
     DoudongDetectorSkill.DEFAULT_CONFIG["name"]: DoudongDetectorSkill,
 }
@@ -128,6 +130,11 @@ _PARAM_LABELS: Dict[str, str] = {
     "calibrate_frames": "自动标定帧数",
     "sample_fps": "采样帧率",
     "baseline_path": "基准文件路径",
+    "black_lost_sec": "无信号确认（秒）",
+    "corrupt_lost_sec": "花屏确认（秒）",
+    "freeze_lost_sec": "冻结确认（秒）",
+    "frame_lost_sec": "无新帧确认（秒）",
+    "recover_sec": "恢复确认（秒）",
 }
 
 _SKIP_PARAM_KEYS = {

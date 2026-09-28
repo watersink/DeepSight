@@ -26,6 +26,8 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   "09": "摄像头角度偏离",
   dark: "画面过暗",
   overexp: "画面过曝",
+  video_lost: "视频丢失",
+  freeze: "画面冻结",
 };
 
 const ALERT_TYPE_OPTIONS = [
