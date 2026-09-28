@@ -26,6 +26,15 @@ _HTTP_UPLOAD_ANALYSIS_TYPES = frozenset({"04", "05", "06", "07", "08"})
 _BOARDING_SKILL_NAMES = frozenset(
     {"boarding_detector", "non_fixed_parking_boarding_detector"}
 )
+
+# 识别类型中文名（仅用于日志）
+_ANALYSIS_TYPE_LABELS = {
+    "04": "非常规通道入井",
+    "05": "非常规通道出井",
+    "06": "入井闸机出闸",
+    "07": "出井闸机入闸",
+    "08": "无轨胶轮车上车点上下车人数",
+}
 # 各 scene 上次已成功推送 MQ 的 enter_count，用于判断是否变化
 _last_mq_enter_count_by_scene: Dict[str, int] = {}
 
@@ -64,6 +73,20 @@ def _video_anomaly_cooldown() -> float:
 
 # 各 (cameraCode, analysisCase) 上次成功转发时间戳
 _last_video_anomaly_forward_at: Dict[Tuple[str, str], float] = {}
+
+# ---------------------------------------------------------------------------
+# 重要运输设备实时人数转发（煤安平台 POST /mine/ai/importPersonCount，文档 9）
+# ---------------------------------------------------------------------------
+
+# 监控点位编码：参照附录A.1 矿井位置编码，14 位数字
+_POSITION_CODE_RE = re.compile(r"^\d{14}$")
+# 出入井方向
+_DIRECTION_IN = "01"
+_DIRECTION_OUT = "02"
+# 摄像仪 analysis_type（01=人员计数入井，02=人员计数出井）-> direction 映射
+_ANALYSIS_TYPE_TO_DIRECTION = {"01": _DIRECTION_IN, "02": _DIRECTION_OUT}
+# 需要转发到 importPersonCount 的技能（画面人数检测）
+_PRESENCE_SKILL_NAMES = frozenset({"person_presence_detector26"})
 
 
 def configure_alert_queue(alert_queue) -> None:
@@ -333,7 +356,10 @@ def _count_current_frame_violators(event: Dict[str, Any]) -> Dict[str, int]:
     return {code: len(ids) for code, ids in track_ids_by_type.items()}
 
 
-def _build_counting_recog_payloads(event: Dict[str, Any]) -> List[Dict[str, str]]:
+def _build_counting_recog_payloads(
+    event: Dict[str, Any],
+    raw_frame: Any = None,
+) -> List[Dict[str, Any]]:
     mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
     if not mine_code or not _MINE_CODE_RE.match(mine_code):
         logger.warning(
@@ -369,9 +395,19 @@ def _build_counting_recog_payloads(event: Dict[str, Any]) -> List[Dict[str, str]
         )
         return []
 
+    # 证据图片：本次告警帧 -> JPEG Base64（同帧所有识别类型共用同一张）
+    images_base64: List[str] = []
+    image_b64 = _frame_to_jpeg_base64(raw_frame)
+    if image_b64:
+        images_base64 = [image_b64]
+    else:
+        logger.info(
+            "识别结果上传：无可用告警帧，仅推送数据 scene=%s", event.get("scene_id")
+        )
+
     # 当前帧各类型违规人数（非累计）；04/05/06/07/08 走 HTTP 上传
     violator_counts = _count_current_frame_violators(event)
-    payloads: List[Dict[str, str]] = []
+    payloads: List[Dict[str, Any]] = []
     for analysis_type in recognition_types:
         code = str(analysis_type or "").strip()
         if code not in _HTTP_UPLOAD_ANALYSIS_TYPES:
@@ -387,65 +423,87 @@ def _build_counting_recog_payloads(event: Dict[str, Any]) -> List[Dict[str, str]
                 "analysisType": code,
                 "analysisCase": f"{person_count:04d}",
                 "dataTime": data_time,
+                "imagesBase64": images_base64,
             }
         )
     return payloads
 
 
-def _post_counting_recog(payload: Dict[str, str]) -> None:
-    url = str(settings.COUNTING_RECOG_UPLOAD_URL or "").strip()
-    if not url:
-        logger.warning("跳过识别结果上传：COUNTING_RECOG_UPLOAD_URL 未配置")
-        return
+# ===========================================================================
+# 【对接文档 §7】人员计数识别数据-推送
+#   接口：POST /mine/ai/countingRecog
+#   识别类型 analysisType：04 非常规通道入井 / 05 非常规通道出井 /
+#     06 入井闸机出闸 / 07 出井闸机入闸 / 08 无轨胶轮车上车点上下车人数识别
+#   识别结果 analysisCase：4 位补零人数（0001=1人，依此类推）
+#   请求体为 JSON 数组，一次可推送多条，含证据图片 imagesBase64（可选）
+#   平台落库后经 SSE（事件名 countingRecog）推给前端
+#   实现：app/services/coal_counting_recog_push.py
+#   调用位置：default_alert_handler()
+#   人数来源：_count_current_frame_violators()（bypass_events /
+#     count_exit_events / enter_events，按 track_id 去重）
+# ===========================================================================
+def push_counting_recog_upload(
+    event: Dict[str, Any],
+    raw_frame: Any = None,
+) -> List[Dict[str, Any]]:
+    """将本次识别结果转发到煤安平台 ``POST /mine/ai/countingRecog``（文档 7）。
 
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(
-            req, timeout=settings.COUNTING_RECOG_UPLOAD_TIMEOUT
-        ) as resp:
-            resp_body = resp.read().decode("utf-8", errors="replace")
-            logger.info(
-                "识别结果上传成功 analysisType=%s analysisCase=%s status=%s body=%s",
-                payload.get("analysisType"),
-                payload.get("analysisCase"),
-                getattr(resp, "status", None),
-                resp_body[:200],
-            )
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", errors="replace")
-        logger.error(
-            "识别结果上传 HTTP %s analysisType=%s body=%s",
-            e.code,
-            payload.get("analysisType"),
-            detail[:300],
-        )
-    except urllib.error.URLError as e:
-        logger.error(
-            "无法连接识别结果上传接口 (%s): %s",
-            url,
-            e.reason,
-        )
-    except Exception:
-        logger.exception(
-            "识别结果上传异常 analysisType=%s",
-            payload.get("analysisType"),
-        )
+    - 请求体为 **JSON 数组**，一次把同帧所有识别类型（04/05/06/07/08）作为多条一起提交；
+    - 证据图片取本次告警帧（Base64），为空则 ``localFiles`` 为 ``[]``；
+    - 落库后平台会经 SSE（事件名 ``countingRecog``）推给前端；
+    - 失败只记日志，不影响原有告警流程。
 
-
-def push_counting_recog_upload(event: Dict[str, Any]) -> List[Dict[str, str]]:
-    """将本次告警按识别类型推送到 countingRecog/upload。"""
-    payloads = _build_counting_recog_payloads(event)
+    返回构造好的 payload 列表（供调用方打印字段），未产生记录时返回空列表。
+    """
+    payloads = _build_counting_recog_payloads(event, raw_frame)
     if not payloads:
         return []
-    # 同帧可能有多种识别类型（如绕行 04 + 闸机翻越 06），每种 analysisType 各推送一次
-    for payload in payloads:
-        _post_counting_recog(payload)
+
+    # 识别类型中文名，便于日志排查
+    labels = [
+        _ANALYSIS_TYPE_LABELS.get(str(p.get("analysisType") or ""), "")
+        for p in payloads
+    ]
+    logger.info(
+        "识别结果转发 /mine/ai/countingRecog：scene=%s cameraCode=%s mineCode=%s "
+        "dataTime=%s types=%s cases=%s 图片=%s",
+        event.get("scene_id"),
+        payloads[0].get("cameraCode"),
+        payloads[0].get("mineCode"),
+        payloads[0].get("dataTime"),
+        [p.get("analysisType") for p in payloads],
+        [p.get("analysisCase") for p in payloads],
+        [len(p.get("imagesBase64") or []) for p in payloads],
+    )
+    if any(labels):
+        logger.info(
+            "识别结果含义：%s",
+            "；".join(
+                f"{p.get('analysisType')}={label}（{p.get('analysisCase')} 人）"
+                for p, label in zip(payloads, labels)
+                if label
+            ),
+        )
+
+    try:
+        from app.services.coal_counting_recog_push import push_counting_recog_records
+
+        result = push_counting_recog_records(payloads)
+    except Exception:
+        logger.exception(
+            "识别结果转发失败 scene=%s types=%s",
+            event.get("scene_id"),
+            [p.get("analysisType") for p in payloads],
+        )
+        return payloads
+
+    if result and result.get("code") == 200:
+        logger.info(
+            "识别结果转发成功 scene=%s pushed=%s uploaded=%s",
+            event.get("scene_id"),
+            result.get("pushed"),
+            result.get("uploaded"),
+        )
     return payloads
 
 
@@ -670,6 +728,16 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
     return sorted(hits.items())
 
 
+# ===========================================================================
+# 【对接文档 §6】视频质量异常数据-推送
+#   接口：POST /mine/ai/videoAnomaly     分析类型 analysisType 固定 03
+#   识别结果 analysisCase：0001 画面遮挡 / 0002 摄像仪挪动 / 0003 画面过暗 /
+#     0004 画面过曝 / 0005 图像模糊 / 0006 画面冻结 / 0007 视频丢失 /
+#     0008 画面抖动 / 0009 分辨率异常
+#   实现：app/services/coal_video_anomaly_push.py
+#   调用位置：default_alert_handler()；巡检路径见 snapshot_patrol._emit_alert()
+#   触发信号 -> analysisCase 映射见下方 VIDEO_ANOMALY_SIGNAL_CASE
+# ===========================================================================
 def forward_video_anomaly_alerts(
     event: Dict[str, Any],
     raw_frame: Any = None,
@@ -798,6 +866,178 @@ def forward_video_anomaly_alerts(
     return result
 
 
+def _resolve_position_info(
+    event: Dict[str, Any],
+    camera_code: str,
+    scene: str,
+) -> Tuple[str, str, str]:
+    """解析 importPersonCount 需要的 (positionName, positionCode, direction)。
+
+    取值优先级：
+    - positionName：事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_POSITION_NAME
+                    > 摄像仪 position_desc
+    - positionCode：事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_POSITION_CODE
+    - direction：   事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_DIRECTION
+                    > 摄像仪 analysis_type 映射（01->01 入井，02->02 出井）
+
+    即：**显式配置优先于摄像仪自动取值**（配置了就以配置为准），
+    摄像仪字段仅作为未配置时的兜底。
+
+    本项目库里没有 14 位位置编码，positionCode 为空时必须显式配置，
+    否则调用方应跳过推送（不猜、不编，避免把数据挂到错误的点位上）。
+    """
+    position_name = str(event.get("position_name") or "").strip()
+    position_code = str(event.get("position_code") or "").strip()
+    direction = str(event.get("direction") or "").strip()
+
+    # 事件字段优先；缺失时用配置覆盖摄像仪自动取值
+    if not position_code:
+        position_code = str(
+            getattr(settings, "COAL_IMPORT_PERSON_COUNT_POSITION_CODE", "") or ""
+        ).strip()
+    if not position_name:
+        position_name = str(
+            getattr(settings, "COAL_IMPORT_PERSON_COUNT_POSITION_NAME", "") or ""
+        ).strip()
+    if not direction:
+        direction = str(
+            getattr(settings, "COAL_IMPORT_PERSON_COUNT_DIRECTION", "") or ""
+        ).strip()
+
+    # 仍需兜底时才反查摄像仪（position_desc / analysis_type）
+    if not position_name or not direction:
+        looked = _lookup_camera_by_scene(scene) if scene else None
+        if looked:
+            if not position_name:
+                position_name = str(looked.get("position_desc") or "").strip()
+            if not direction:
+                analysis_type = str(looked.get("analysis_type") or "").strip()
+                direction = _ANALYSIS_TYPE_TO_DIRECTION.get(analysis_type, "")
+
+    # 兜底：位置名缺失时用点位编码/摄像仪编码，保证必填字段有值
+    if not position_name:
+        position_name = position_code or camera_code
+
+    return position_name, position_code, direction
+
+
+# ===========================================================================
+# 【对接文档 §9】重要运输设备实时人数-推送
+#   接口：POST /mine/ai/importPersonCount
+#   推送重要运输设备（架空乘人装置、罐笼、无轨胶轮车、电机车、单轨吊等）
+#   监控点位的实时人数；按 positionCode 先删除后新增（全量替换），
+#   同一监控点位可在一次请求内推送入井、出井两条（direction 不同、
+#   cameraCode 不同）；平台落库后经 SSE（事件名 importPersonCount）
+#   推给前端大屏，历史查询 GET /mine/importPersonCount/list
+#   入参：positionName / positionCode(14位) / cameraCode / direction(01入井,02出井)
+#     / personCount / mineCode(可选)
+#   实现：app/services/coal_import_person_count_push.py
+#   调用位置：default_alert_handler()
+#   数据来源：画面人数检测技能 person_presence_detector26（personCount 取事件 count）
+# ===========================================================================
+def forward_import_person_count(
+    event: Dict[str, Any],
+    *,
+    scene_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """把画面人数检测结果转发到煤安平台 ``POST /mine/ai/importPersonCount``（文档 9）。
+
+    仅处理画面人数检测技能（``person_presence_detector26``）产生的事件：
+    - ``personCount`` 取当前画面人数（事件 ``count``）；
+    - ``positionName`` / ``positionCode`` / ``direction`` 由 ``_resolve_position_info`` 解析；
+    - **positionCode 必须为 14 位数字**，否则跳过并记日志（缺必填字段不推送，
+      避免平台按 positionCode 全量替换时把数据挂到错误点位上）；
+    - 数据落库后平台经 SSE（事件名 ``importPersonCount``）推给前端；
+    - 全部失败只记日志，不影响原有告警流程。
+    """
+    scene = str(scene_id or event.get("scene_id") or "").strip()
+
+    if not bool(
+        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_ENABLED", True)
+    ):
+        return None
+
+    skill_name = str(event.get("skill_name") or "").strip()
+    if skill_name not in _PRESENCE_SKILL_NAMES:
+        # 非画面人数检测技能不在此接口转发
+        return None
+
+    mine_code, camera_code, _analysis_type = _resolve_mine_camera_codes(event)
+    if not camera_code:
+        logger.warning(
+            "重要运输设备人数转发：cameraCode 为空，跳过 scene=%s", scene
+        )
+        return None
+
+    person_count = int(event.get("count", 0) or 0)
+
+    position_name, position_code, direction = _resolve_position_info(
+        event, camera_code, scene
+    )
+    if not _POSITION_CODE_RE.match(position_code):
+        logger.warning(
+            "重要运输设备人数转发：positionCode 缺失或非 14 位数字 "
+            "（当前=%r）scene=%s cameraCode=%s → 跳过推送。"
+            "请在 .env 配置 COAL_IMPORT_PERSON_COUNT_POSITION_CODE",
+            position_code,
+            scene,
+            camera_code,
+        )
+        return None
+    if direction not in (_DIRECTION_IN, _DIRECTION_OUT):
+        logger.warning(
+            "重要运输设备人数转发：direction 缺失或非法（当前=%r）"
+            "scene=%s cameraCode=%s → 跳过推送。"
+            "请配置 COAL_IMPORT_PERSON_COUNT_DIRECTION 或摄像仪 analysis_type",
+            direction,
+            scene,
+            camera_code,
+        )
+        return None
+
+    record: Dict[str, Any] = {
+        "positionName": position_name,
+        "positionCode": position_code,
+        "cameraCode": camera_code,
+        "direction": direction,
+        "personCount": person_count,
+        "mineCode": mine_code or None,
+    }
+
+    logger.info(
+        "重要运输设备人数转发：准备推送 scene=%s positionName=%s positionCode=%s "
+        "cameraCode=%s direction=%s personCount=%s mineCode=%s",
+        scene,
+        position_name,
+        position_code,
+        camera_code,
+        direction,
+        person_count,
+        mine_code,
+    )
+
+    try:
+        from app.services.coal_import_person_count_push import (
+            push_import_person_count_records,
+        )
+
+        result = push_import_person_count_records([record])
+    except Exception:
+        logger.exception(
+            "重要运输设备人数转发失败 scene=%s positionCode=%s", scene, position_code
+        )
+        return None
+
+    if result and result.get("code") == 200:
+        logger.info(
+            "重要运输设备人数转发成功 scene=%s positionCode=%s personCount=%s",
+            scene,
+            position_code,
+            person_count,
+        )
+    return result
+
+
 def default_alert_handler(data, raw_frame, scene_id):
     event = build_person_count_alert(data, raw_frame, scene_id)
     if not event.get("skill_name"):
@@ -830,10 +1070,10 @@ def default_alert_handler(data, raw_frame, scene_id):
         except Exception:
             logger.exception("Webhook 调度失败 scene=%s", scene_id)
 
-    # 将识别结果 POST 到 countingRecog/upload 接口（analysisType=04/05/06/07/08）
-    payloads = push_counting_recog_upload(event)
-    # 同帧可能有多种识别类型（如绕行 04 + 闸机翻越 06），recognition_types 为 ["04","06"]
-    # 时会生成多条 payload，每种 analysisType 各一条，故循环分别上传与打印
+    # 将识别结果作为 JSON 数组转发到煤安平台 /mine/ai/countingRecog（文档 7，含证据图片）
+    payloads = push_counting_recog_upload(event, raw_frame)
+    # 同帧可能有多种识别类型（如绕行 04 + 闸机翻越 06），会合并成一个数组一次提交，
+    # 此处仅逐条打印字段，便于排查
     for payload in payloads:
         logger.info(
             "识别结果上传字段 mineCode=%s cameraCode=%s analysisType=%s "
@@ -867,6 +1107,19 @@ def default_alert_handler(data, raw_frame, scene_id):
             anomaly_result.get("uploaded"),
             anomaly_result.get("code"),
             anomaly_result.get("msg"),
+        )
+
+    # 画面人数检测（person_presence_detector26）→ 重要运输设备实时人数
+    # POST /mine/ai/importPersonCount；内部校验 positionCode/direction，
+    # 缺必填字段时跳过，不影响其他推送
+    presence_result = forward_import_person_count(event, scene_id=scene_id)
+    if presence_result:
+        logger.info(
+            "重要运输设备人数转发结果 scene=%s pushed=%s code=%s msg=%s",
+            scene_id,
+            presence_result.get("pushed"),
+            presence_result.get("code"),
+            presence_result.get("msg"),
         )
 
     # 写入跨进程队列，供 SSE 订阅端推送告警
