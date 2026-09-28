@@ -78,9 +78,11 @@ class _DetectorConfig:
     partial_texture_collapse_ratio: float = 0.55
     brightness_only_luma_delta: float = 35.0
     brightness_only_min_gradient_ratio: float = 0.70
-    suspect_frames_to_alarm: int = 8
+    suspect_frames_to_alarm: int = 3
     clear_frames_to_recover: int = 15
-    warmup_frames: int = 10
+    warmup_frames: int = 15
+    # 仅当当前帧足够「清晰」时才更新基线，避免遮挡把基线拖低后比值回升
+    baseline_healthy_ratio: float = 0.88
 
 
 @dataclass
@@ -224,7 +226,7 @@ class OcclusionDetector:
         self._frame_index += 1
 
         if self._frame_index <= cfg.warmup_frames:
-            self._update_baseline(metrics)
+            self._update_baseline_warmup(metrics)
             return OcclusionFrameResult(
                 state=_OcclusionState.NORMAL,
                 is_occluded=False,
@@ -247,7 +249,7 @@ class OcclusionDetector:
         if self._state != _OcclusionState.OCCLUDED:
             if self._suspect_streak >= cfg.suspect_frames_to_alarm:
                 self._state = _OcclusionState.OCCLUDED
-            elif self._suspect_streak >= max(2, cfg.suspect_frames_to_alarm // 3):
+            elif self._suspect_streak >= 1:
                 self._state = _OcclusionState.SUSPECT
             else:
                 self._state = _OcclusionState.NORMAL
@@ -257,19 +259,50 @@ class OcclusionDetector:
             self._suspect_streak = 0
 
         if self._state == _OcclusionState.NORMAL and not frame_is_suspect:
-            self._update_baseline(metrics)
+            self._update_baseline_if_healthy(metrics)
 
         is_occluded = self._state == _OcclusionState.OCCLUDED
+        # 本帧可疑时也保留置信度，便于推流叠加层与 ALARM 未确认前排查
+        show_conf = (
+            is_occluded
+            or self._state == _OcclusionState.SUSPECT
+            or frame_is_suspect
+        )
         return OcclusionFrameResult(
             state=self._state,
             is_occluded=is_occluded,
-            confidence=confidence if is_occluded or self._state == _OcclusionState.SUSPECT else 0.0,
+            confidence=confidence if show_conf else 0.0,
             reasons=reasons if reasons else (["ok"] if not is_occluded else reasons),
             metrics=metrics,
             scores=scores,
         )
 
-    def _update_baseline(self, metrics: Dict[str, float]) -> None:
+    def _update_baseline_warmup(self, metrics: Dict[str, float]) -> None:
+        """预热：对梯度/边缘/拉普拉斯取峰值，避免一上来就是遮挡画面时基线过低。"""
+        if self._baseline is None:
+            self._baseline = dict(metrics)
+            return
+        for key in ("gradient_energy", "edge_density", "laplacian_var"):
+            self._baseline[key] = max(float(self._baseline[key]), float(metrics[key]))
+        alpha = self.config.baseline_alpha
+        for key, value in metrics.items():
+            if key in ("gradient_energy", "edge_density", "laplacian_var"):
+                continue
+            self._baseline[key] = (1.0 - alpha) * self._baseline[key] + alpha * value
+
+    def _baseline_is_healthy(self, metrics: Dict[str, float]) -> bool:
+        if self._baseline is None:
+            return True
+        ratio = self.config.baseline_healthy_ratio
+        return (
+            metrics["gradient_energy"] >= self._baseline["gradient_energy"] * ratio
+            and metrics["edge_density"] >= self._baseline["edge_density"] * ratio
+            and metrics["laplacian_var"] >= self._baseline["laplacian_var"] * ratio
+        )
+
+    def _update_baseline_if_healthy(self, metrics: Dict[str, float]) -> None:
+        if not self._baseline_is_healthy(metrics):
+            return
         alpha = self.config.baseline_alpha
         if self._baseline is None:
             self._baseline = dict(metrics)
@@ -413,14 +446,15 @@ class ZhedangDetectorSkill(BaseSkill):
             "enable_timing_log": False,
             "reference_image_url": "",
             "check_interval_sec": 2,
-            "confirm_count": 3,
+            "confirm_count": 2,
             "cooldown_sec": 5,
             "max_side": 640,
             "baseline_alpha": 0.02,
             "texture_collapse_ratio": 0.45,
             "edge_collapse_ratio": 0.40,
             "laplacian_collapse_ratio": 0.50,
-            "warmup_frames": 10,
+            "warmup_frames": 15,
+            "baseline_healthy_ratio": 0.88,
             "clear_frames_to_recover": 15,
             "brightness_only_luma_delta": 35.0,
         },
@@ -454,7 +488,10 @@ class ZhedangDetectorSkill(BaseSkill):
             ),
             suspect_frames_to_alarm=confirm_count,
             clear_frames_to_recover=max(1, int(params.get("clear_frames_to_recover", 15) or 15)),
-            warmup_frames=max(1, int(params.get("warmup_frames", 10) or 10)),
+            warmup_frames=max(1, int(params.get("warmup_frames", 15) or 15)),
+        )
+        det_cfg.baseline_healthy_ratio = float(
+            params.get("baseline_healthy_ratio", 0.88) or 0.88
         )
         self._detector = OcclusionDetector(det_cfg)
         self.reference_image_url = str(params.get("reference_image_url") or "").strip()
@@ -470,6 +507,7 @@ class ZhedangDetectorSkill(BaseSkill):
         )
         self._last_process_ts: Optional[float] = None
         self._last_infer_ts: Optional[float] = None
+        self._last_emit_ts: Optional[float] = None
         self._last_status: Optional[str] = None
         self._last_alert_ts = 0.0
         self._last_result: Dict[str, Any] = {}
@@ -637,15 +675,17 @@ class ZhedangDetectorSkill(BaseSkill):
             if image is None or image.size == 0:
                 return SkillResult.error_result("无效的图像数据")
 
-            now = time.time()
-            if (
-                self._last_result
-                and self._last_process_ts is not None
-                and now - self._last_process_ts < self.check_interval_sec
-            ):
-                return SkillResult.success_result(self._result_without_emit(self._last_result))
-
+            # 每帧都跑检测（与 LLM preview 一致）；仅平台落库/推送按间隔节流
             data = self.detect_frame(image)
+            now = time.time()
+            can_emit = (
+                self._last_emit_ts is None
+                or now - self._last_emit_ts >= self.check_interval_sec
+            )
+            if not can_emit and data.get("has_zhedang_alarm"):
+                data = self._result_without_emit(data)
+            elif data.get("has_zhedang_alarm"):
+                self._last_emit_ts = now
             self._last_process_ts = now
             self._last_infer_ts = now
             return SkillResult.success_result(data)
@@ -717,19 +757,39 @@ class ZhedangDetectorSkill(BaseSkill):
         return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
 
+_OCC_STATE_ZH = {
+    "normal": "正常",
+    "suspect": "可疑",
+    "occluded": "已确认遮挡",
+}
+
+
 def _draw_zhedang_overlay(frame: np.ndarray, result: Dict[str, Any]) -> np.ndarray:
     status = str(result.get("status") or "OK")
-    color = _STATUS_COLOR.get(status, (200, 200, 200))
-    thickness = 10 if status == "ALARM" else 5
+    occ = result.get("occlusion_state") or {}
+    occ_state = str(occ.get("state") or "normal")
+    # 叠加层优先展示状态机 occ_state，避免「OK + 纹理骤降」误解
+    display_status = status
+    if status == "OK" and occ_state in {"suspect", "occluded"}:
+        display_status = "CANDIDATE" if occ_state == "suspect" else "ALARM"
+
+    conf = float(occ.get("confidence") or 0)
+    reasons = [_REASON_ZH.get(r, r) for r in (occ.get("reasons") or []) if r != "ok"]
+    if display_status == "OK" and (conf >= 0.5 or reasons):
+        display_status = "CANDIDATE"
+    if occ.get("is_occluded") or occ_state == "occluded":
+        display_status = "ALARM"
+
+    color = _STATUS_COLOR.get(display_status, (200, 200, 200))
+    thickness = 10 if display_status == "ALARM" else (7 if display_status == "CANDIDATE" else 4)
     vis = frame.copy()
     cv2.rectangle(vis, (0, 0), (vis.shape[1] - 1, vis.shape[0] - 1), color, thickness)
 
-    occ = result.get("occlusion_state") or {}
-    reasons = [_REASON_ZH.get(r, r) for r in (occ.get("reasons") or []) if r != "ok"]
+    occ_label = _OCC_STATE_ZH.get(occ_state, occ_state)
     lines = [
-        f"遮挡检测：{status}",
-        f"报警：{'是' if result.get('has_zhedang_alarm') else '否'}",
-        f"置信度：{float(occ.get('confidence') or 0):.2f}",
+        f"遮挡检测：{display_status}（机内：{occ_label}）",
+        f"平台报警：{'是' if result.get('has_zhedang_alarm') else '否'}",
+        f"本帧置信度：{float(occ.get('confidence') or 0):.2f}",
         f"原因：{', '.join(reasons) if reasons else '-'}",
     ]
     scores = occ.get("scores") or {}

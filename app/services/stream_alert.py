@@ -49,6 +49,9 @@ _last_mq_enter_count_by_scene: Dict[str, int] = {}
 # 注意：本项目内部 08/09 是挪移/角度识别类型，对应平台 0002（摄像仪挪动），
 # 与平台 0008/0009（抖动/分辨率）语义不同，不可直译。
 VIDEO_ANOMALY_SIGNAL_CASE: Dict[str, Tuple[str, str]] = {
+    "occlusion": ("0001", "画面遮挡"),
+    "has_zhedang_alarm": ("0001", "画面遮挡"),
+    "zhedang": ("0001", "画面遮挡"),
     "dark": ("0003", "画面过暗"),
     "has_dark_alarm": ("0003", "画面过暗"),
     "overexp": ("0004", "画面过曝"),
@@ -283,6 +286,7 @@ def build_person_count_alert(
         "has_dark_alarm": bool(data.get("has_dark_alarm")),
         "has_overexp_alarm": bool(data.get("has_overexp_alarm")),
         "has_blur_alarm": bool(data.get("has_blur_alarm")),
+        "has_zhedang_alarm": bool(data.get("has_zhedang_alarm")),
         "has_camera_shift": bool(data.get("has_camera_shift")),
         "has_camera_tilt": bool(data.get("has_camera_tilt")),
         "recognition_types": recognition_types,
@@ -717,6 +721,7 @@ def _detect_video_anomaly_cases(event: Dict[str, Any]) -> List[Tuple[str, str]]:
         "has_dark_alarm",
         "has_overexp_alarm",
         "has_blur_alarm",
+        "has_zhedang_alarm",
         "has_camera_shift",
         "has_camera_tilt",
     ):
