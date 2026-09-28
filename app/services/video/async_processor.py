@@ -219,6 +219,9 @@ class AsyncFrameProcessor:
                 alert_data["alert_video_enabled"] = bool(
                     self.task_config.get("alert_video_enabled", False)
                 )
+                alert_data["alert_video_duration_sec"] = int(
+                    self.task_config.get("alert_video_duration_sec") or 10
+                )
                 timing_ms = alert_data.get("timing_ms")
                 if isinstance(timing_ms, dict):
                     for key, value in timing_ms.items():

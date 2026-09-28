@@ -115,6 +115,7 @@ class CameraFanoutPipeline:
             push_stream = bool(resolved.get("push_annotated_stream", True))
             alert_image_enabled = bool(resolved.get("alert_image_enabled", True))
             alert_video_enabled = bool(resolved.get("alert_video_enabled", False))
+            alert_video_duration_sec = int(resolved.get("alert_video_duration_sec") or 10)
 
             streamer = None
             if push_stream:
@@ -152,6 +153,7 @@ class CameraFanoutPipeline:
                 "fence_config": resolved.get("fence_config"),
                 "alert_image_enabled": alert_image_enabled,
                 "alert_video_enabled": alert_video_enabled,
+                "alert_video_duration_sec": alert_video_duration_sec,
                 "push_annotated_stream": push_stream,
             }
             processor.start(

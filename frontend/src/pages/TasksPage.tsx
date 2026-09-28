@@ -55,6 +55,7 @@ type TaskForm = {
   enabled: boolean;
   alert_image_enabled: boolean;
   alert_video_enabled: boolean;
+  alert_video_duration_sec: number;
   push_annotated_stream: boolean;
   remark: string;
   schedule: TaskScheduleForm;
@@ -166,6 +167,7 @@ const emptyForm = (): TaskForm => ({
   enabled: true,
   alert_image_enabled: true,
   alert_video_enabled: false,
+  alert_video_duration_sec: 10,
   push_annotated_stream: false,
   remark: "",
   schedule: defaultSchedule(),
@@ -555,6 +557,7 @@ export default function TasksPage() {
       enabled: !!t.enabled,
       alert_image_enabled: t.alert_image_enabled !== false,
       alert_video_enabled: !!t.alert_video_enabled,
+      alert_video_duration_sec: Number(t.alert_video_duration_sec) || 10,
       push_annotated_stream: !!t.push_annotated_stream,
       remark: t.remark || "",
       schedule: {
@@ -734,6 +737,9 @@ export default function TasksPage() {
           enabled: form.enabled,
           alert_image_enabled: form.alert_image_enabled,
           alert_video_enabled: isSnap ? false : form.alert_video_enabled,
+          alert_video_duration_sec: isSnap
+            ? 10
+            : Math.max(2, Math.min(60, Number(form.alert_video_duration_sec) || 10)),
           push_annotated_stream: isSnap ? false : form.push_annotated_stream,
           remark: form.remark || "",
           schedule,
@@ -1151,6 +1157,25 @@ export default function TasksPage() {
                       </select>
                     </label>
                   )}
+                  {formHasStream && form.alert_video_enabled && (
+                    <label>
+                      报警视频时长（秒）
+                      <input
+                        type="number"
+                        min={2}
+                        max={60}
+                        step={1}
+                        value={form.alert_video_duration_sec}
+                        onChange={(e) =>
+                          setForm({
+                            ...form,
+                            alert_video_duration_sec:
+                              Math.max(2, Math.min(60, Number(e.target.value) || 10)),
+                          })
+                        }
+                      />
+                    </label>
+                  )}
                   {formHasStream && (
                     <label>
                       AI 识别结果推流
@@ -1179,7 +1204,7 @@ export default function TasksPage() {
 
                 {formHasStream && (
                   <p className="muted" style={{ margin: "0 0 12px", fontSize: 12 }}>
-                    关闭「AI 识别结果推流」时不启动 FFmpeg 画框推流，FLV 预览不可用；关闭「报警视频」时不截取证据视频。
+                    关闭「AI 识别结果推流」时不启动 FFmpeg 画框推流，FLV 预览不可用；关闭「报警视频」时不截取证据视频；开启时可配置证据视频总时长（默认 10 秒，前后各半）。
                   </p>
                 )}
                 {formHasSnapshot && (

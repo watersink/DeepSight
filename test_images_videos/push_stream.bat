@@ -1,9 +1,12 @@
 ::ffmpeg -re -stream_loop -1 -i 0c95571789bf65675ba644af86bea16d.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
-::ffmpeg -re -stream_loop -1 -i rujing.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
+::ffmpeg -re -stream_loop -1 -i rujing.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/rujing
 ::ffmpeg -re -stream_loop -1 -i monkeycar.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
 ::ffmpeg -re -stream_loop -1 -i guanlongin.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
 ::ffmpeg -re -stream_loop -1 -i guanlongin1.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
 ::ffmpeg -re -stream_loop -1 -i huifengmian.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
-ffmpeg -re -stream_loop -1 -i rotate.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
-::ffmpeg -re -stream_loop -1 -i nuoyi.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
-::ffmpeg -re -stream_loop -1 -i zhedang.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/stream01
+ffmpeg -re -stream_loop -1 -i rotate.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/rotate
+::ffmpeg -re -stream_loop -1 -i nuoyi.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/nuoyi
+::ffmpeg -re -stream_loop -1 -i zhedang.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/zhedang
+::ffmpeg -re -stream_loop -1 -i mohu.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/mohu
+::ffmpeg -re -stream_loop -1 -i guobao.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/guobao
+::ffmpeg -re -stream_loop -1 -i guoan.mp4 -c copy -f flv rtmp://10.1.3.21:1935/live/guoan

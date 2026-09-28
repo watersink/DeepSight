@@ -275,6 +275,9 @@ class TaskConfigCreate(BaseModel):
     enabled: bool = True
     alert_image_enabled: bool = Field(default=True, description="是否保存报警图片")
     alert_video_enabled: bool = Field(default=False, description="是否截取报警视频")
+    alert_video_duration_sec: int = Field(
+        default=10, ge=2, le=60, description="报警视频时长（秒）"
+    )
     push_annotated_stream: bool = Field(
         default=False, description="是否推送 AI 画框识别结果视频"
     )
@@ -297,6 +300,7 @@ class TaskConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
     alert_image_enabled: Optional[bool] = None
     alert_video_enabled: Optional[bool] = None
+    alert_video_duration_sec: Optional[int] = Field(default=None, ge=2, le=60)
     push_annotated_stream: Optional[bool] = None
     schedule: Optional[TaskSchedule] = None
     worker_id: Optional[str] = Field(default=None, max_length=64)
@@ -316,6 +320,7 @@ class TaskConfigOut(BaseModel):
     enabled: bool
     alert_image_enabled: bool = True
     alert_video_enabled: bool = False
+    alert_video_duration_sec: int = 10
     push_annotated_stream: bool = False
     schedule: Optional[Dict[str, Any]] = None
     schedule_active: bool = False

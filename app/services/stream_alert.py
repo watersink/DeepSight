@@ -296,6 +296,7 @@ def build_person_count_alert(
         "image_minio_url": pic_url,
         "alert_image_enabled": want_image,
         "alert_video_enabled": bool(data.get("alert_video_enabled", False)),
+        "alert_video_duration_sec": int(data.get("alert_video_duration_sec") or 10),
         "shape": shape,
         "process_time_ms": process_time_ms,
         "detect_time_ms": detect_time_ms,

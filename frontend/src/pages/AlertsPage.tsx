@@ -92,7 +92,7 @@ function EvidenceModal({
             )}
           </section>
           <section>
-            <h3 className="section-title">报警视频（约 10 秒）</h3>
+            <h3 className="section-title">报警视频</h3>
             {videoUrl ? (
               <video
                 className="evidence-video"
@@ -104,7 +104,7 @@ function EvidenceModal({
               />
             ) : (
               <p className="muted">
-                暂无报警视频。新告警会在触发后异步截取约 10 秒证据视频，请稍后刷新。
+                暂无报警视频。新告警会在触发后按任务配置时长异步截取证据视频，请稍后刷新。
               </p>
             )}
           </section>

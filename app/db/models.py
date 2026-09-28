@@ -175,6 +175,8 @@ class TaskConfig(Base):
     # 报警图片：默认需要；报警视频截取：默认不需要；AI 画框推流：默认不需要
     alert_image_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     alert_video_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 报警证据视频总时长（秒），前后各半截取；默认 10
+    alert_video_duration_sec: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     push_annotated_stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # 运行时间窗：{enabled, timezone, days[1-7], start_time, end_time}
     schedule: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

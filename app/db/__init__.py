@@ -510,6 +510,10 @@ def _ensure_task_output_option_columns() -> None:
                 "ADD COLUMN `alert_video_enabled` TINYINT(1) NOT NULL DEFAULT 0",
             ),
             (
+                "alert_video_duration_sec",
+                "ADD COLUMN `alert_video_duration_sec` INT NOT NULL DEFAULT 10",
+            ),
+            (
                 "push_annotated_stream",
                 "ADD COLUMN `push_annotated_stream` TINYINT(1) NOT NULL DEFAULT 0",
             ),

@@ -1075,6 +1075,7 @@ def _enrich_task(row: TaskConfig) -> dict:
         "enabled": row.enabled,
         "alert_image_enabled": bool(getattr(row, "alert_image_enabled", True)),
         "alert_video_enabled": bool(getattr(row, "alert_video_enabled", False)),
+        "alert_video_duration_sec": int(getattr(row, "alert_video_duration_sec", 10) or 10),
         "push_annotated_stream": bool(getattr(row, "push_annotated_stream", False)),
         "schedule": schedule,
         "schedule_active": bool(schedule and schedule.get("enabled") and is_within_schedule(schedule)),
@@ -1245,6 +1246,7 @@ def build_stream_payload(row: TaskConfig) -> Dict[str, Any]:
         "analysis_type": getattr(cam, "analysis_type", None) or None,
         "alert_image_enabled": bool(getattr(row, "alert_image_enabled", True)),
         "alert_video_enabled": bool(getattr(row, "alert_video_enabled", False)),
+        "alert_video_duration_sec": int(getattr(row, "alert_video_duration_sec", 10) or 10),
         "push_annotated_stream": bool(getattr(row, "push_annotated_stream", False)),
     }
     if algo.count_line:
@@ -1413,7 +1415,18 @@ def persist_alert_event(event: Dict[str, Any]) -> Optional[AlertRecord]:
             and scene_id
             and skill_name
         ):
-            schedule_alert_evidence_clip(alert_pk, scene_id, skill_name)
+            duration_sec = int(event.get("alert_video_duration_sec") or 10)
+            duration_sec = max(2, min(duration_sec, 60))
+            total_ms = duration_sec * 1000
+            back_ms = total_ms // 2
+            forward_ms = total_ms - back_ms
+            schedule_alert_evidence_clip(
+                alert_pk,
+                scene_id,
+                skill_name,
+                back_ms=back_ms,
+                forward_ms=forward_ms,
+            )
         return detached
     except Exception:
         # 子进程写库失败不影响推流主链路
@@ -1501,7 +1514,7 @@ def schedule_alert_evidence_clip(
     back_ms: int = 5000,
     forward_ms: int = 5000,
 ) -> None:
-    """后台截取约 10s 证据视频并回写 video_url（不阻塞告警主流程）。"""
+    """后台截取证据视频并回写 video_url（不阻塞告警主流程）。"""
     import logging
     import threading
 
@@ -1540,7 +1553,7 @@ def attach_alert_evidence_clip(
     forward_ms: int = 5000,
 ) -> Optional[str]:
     """
-    从推流地址截取前后合计约 10s 的 MP4，上传 MinIO，写回 mgmt_alerts.video_url。
+    从推流地址截取前后合计证据视频 MP4，上传 MinIO，写回 mgmt_alerts.video_url。
     """
     import base64
     import logging
