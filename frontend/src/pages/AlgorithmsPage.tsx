@@ -11,8 +11,9 @@ import coverCameraTilt from "../assets/skills/camera_tilt_detector.png";
 import coverGuoan from "../assets/skills/guoan_detector_skill.png";
 import coverGuobao from "../assets/skills/guobao_detector_skill.png";
 import coverMohu from "../assets/skills/mohu_detector_skill.png";
+import coverZhedang from "../assets/skills/zhedang_detector_skill.png";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 12;
 type ViewMode = "list" | "tile";
 
 /** 打包进前端资源，避免依赖 /skills 静态路径是否被后端正确托管 */
@@ -27,6 +28,7 @@ const COVER_BY_SKILL: Record<string, string> = {
   guoan_detector_skill: coverGuoan,
   guobao_detector_skill: coverGuobao,
   mohu_detector_skill: coverMohu,
+  zhedang_detector_skill: coverZhedang,
 };
 
 function coverOf(s: any): string {
