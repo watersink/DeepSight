@@ -10,6 +10,7 @@ import coverCameraShift from "../assets/skills/camera_shift_detector.png";
 import coverCameraTilt from "../assets/skills/camera_tilt_detector.png";
 import coverGuoan from "../assets/skills/guoan_detector_skill.png";
 import coverGuobao from "../assets/skills/guobao_detector_skill.png";
+import coverMohu from "../assets/skills/mohu_detector_skill.png";
 
 const PAGE_SIZE = 10;
 type ViewMode = "list" | "tile";
@@ -25,6 +26,7 @@ const COVER_BY_SKILL: Record<string, string> = {
   camera_tilt_detector: coverCameraTilt,
   guoan_detector_skill: coverGuoan,
   guobao_detector_skill: coverGuobao,
+  mohu_detector_skill: coverMohu,
 };
 
 function coverOf(s: any): string {
