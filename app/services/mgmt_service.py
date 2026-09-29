@@ -47,6 +47,7 @@ ALERT_RECOGNITION_TYPES = frozenset(
         "occlusion",
         "freeze",
         "shake",
+        "resolution_anomaly",
         "video_lost",
     }
 )
@@ -1515,6 +1516,7 @@ def persist_classified_records(event: Dict[str, Any]) -> List[AlertRecord]:
             or bool(event.get("has_freeze_alarm"))
             or bool(event.get("has_video_lost_alarm"))
             or bool(event.get("has_doudong_alarm"))
+            or bool(event.get("has_fenbianlv_alarm"))
             or bool(event.get("has_camera_shift"))
             or bool(event.get("has_camera_tilt"))
         )

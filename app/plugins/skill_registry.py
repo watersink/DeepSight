@@ -6,6 +6,7 @@ from app.plugins.skills.boarding_detector_skill import BoardingDetectorSkill
 from app.plugins.skills.camera_shift_detector_skill import CameraShiftDetectorSkill
 from app.plugins.skills.camera_tilt_detector_skill import CameraTiltDetectorSkill
 from app.plugins.skills.doudong_detector_skill import DoudongDetectorSkill
+from app.plugins.skills.fenbianlv_detector_skill import FenbianlvDetectorSkill
 from app.plugins.skills.frame_freeze_detector_skill import FrameFreezeDetectorSkill
 from app.plugins.skills.guoan_detector_skill import GuoanDetectorSkill
 from app.plugins.skills.guobao_detector_skill import GuobaoDetectorSkill
@@ -48,6 +49,7 @@ _SKILL_CLASSES: Dict[str, Type[BaseSkill]] = {
     ShipinliuDiushiDetectorSkill.DEFAULT_CONFIG["name"]: ShipinliuDiushiDetectorSkill,
     ZhedangDetectorSkill.DEFAULT_CONFIG["name"]: ZhedangDetectorSkill,
     DoudongDetectorSkill.DEFAULT_CONFIG["name"]: DoudongDetectorSkill,
+    FenbianlvDetectorSkill.DEFAULT_CONFIG["name"]: FenbianlvDetectorSkill,
 }
 
 

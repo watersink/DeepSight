@@ -44,6 +44,7 @@ def default_alert_predicate(data: Dict[str, Any]) -> bool:
         or data.get("has_freeze_alarm")
         or data.get("has_video_lost_alarm")
         or data.get("has_doudong_alarm")
+        or data.get("has_fenbianlv_alarm")
         or data.get("has_camera_shift")
         or data.get("has_camera_tilt")
     )
