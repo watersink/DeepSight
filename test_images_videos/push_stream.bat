@@ -1,8 +1,5 @@
 @echo off
-chcp 65001 >nul
 setlocal EnableExtensions
-
-:: 切到脚本所在目录（视频文件同目录）
 cd /d "%~dp0"
 
 set "RTMP_BASE=rtmp://10.1.3.21:1935/live"
@@ -10,26 +7,30 @@ set "FFMPEG=ffmpeg"
 
 where %FFMPEG% >nul 2>&1
 if errorlevel 1 (
-  echo [错误] 未找到 ffmpeg，请先安装并加入 PATH。
+  echo [ERROR] ffmpeg not found in PATH
   pause
   exit /b 1
 )
 
 echo ========================================
-echo  本地测试流：一键并行推送
-echo  目标: %RTMP_BASE%/^<stream^>
-echo  关闭各推流窗口或结束对应 ffmpeg 即可停推
+echo  DeepSight test push - start all streams
+echo  base: %RTMP_BASE%
 echo ========================================
 echo.
 
-:: 格式: call :push 视频文件 流名
-:: 同一 RTMP 地址只能有一路推流，勿重复 stream 名
+echo [1/2] Killing previous live push ffmpeg ...
+call :kill_all_pushes
+:: ZLM may keep the old publisher session briefly; wait before republish
+timeout /t 5 /nobreak >nul
+echo [1/2] Done
+echo.
 
+echo [2/2] Starting streams ...
 :: call :push "0c95571789bf65675ba644af86bea16d.mp4" "stream01"
 call :push "rujing.mp4" "rujing"
 :: call :push "monkeycar.mp4" "monkeycar"
 :: call :push "guanlongin.mp4" "guanlongin"
-:: call :push "guanlongin1.mp4" "guanlongin1"
+call :push "guanlongin1.mp4" "guanlongin1"
 :: call :push "huifengmian.mp4" "huifengmian"
 call :push "rotate.mp4" "rotate"
 call :push "nuoyi.mp4" "nuoyi"
@@ -42,19 +43,37 @@ call :push "doudong.mp4" "doudong"
 call :push "diushi.mp4" "diushi"
 
 echo.
-echo 已尝试启动全部推流窗口（最小化）。
-echo 按任意键退出本控制台（不会自动杀掉已启动的 ffmpeg）。
+echo All push windows started minimized.
+echo Closing this console will NOT stop ffmpeg.
+echo Press any key to exit this console.
 pause >nul
 exit /b 0
+
+:: ------------------------------------------------------------
+:kill_all_pushes
+for %%S in (
+  stream01 rujing monkeycar guanlongin guanlongin1 guanlongin2 huifengmian
+  rotate nuoyi zhedang mohu guobao guoan freeze doudong diushi
+) do (
+  taskkill /FI "WINDOWTITLE eq push-%%S*" /F >nul 2>&1
+)
+
+powershell -NoProfile -Command ^
+  "$procs = @(Get-CimInstance Win32_Process -Filter \"Name='ffmpeg.exe'\" | Where-Object { $_.CommandLine -match 'rtmp://.*/live/' });" ^
+  "foreach ($p in $procs) { Write-Host ('  kill PID=' + $p.ProcessId); Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }"
+goto :eof
 
 :: ------------------------------------------------------------
 :push
 set "FILE=%~1"
 set "STREAM=%~2"
 if not exist "%FILE%" (
-  echo [跳过] 缺少文件: %FILE%
+  echo [SKIP] missing file: %FILE%
   goto :eof
 )
-echo [启动] %FILE%  -^>  %RTMP_BASE%/%STREAM%
-start "push-%STREAM%" /MIN %FFMPEG% -hide_banner -loglevel warning -re -stream_loop -1 -i "%FILE%" -c copy -f flv "%RTMP_BASE%/%STREAM%"
+echo [START] %FILE%  -^>  %RTMP_BASE%/%STREAM%
+:: Same command line as manual: ffmpeg -re -stream_loop -1 -i ... -c copy -f flv ...
+start "push-%STREAM%" /MIN %FFMPEG% -re -stream_loop -1 -i "%FILE%" -c copy -f flv "%RTMP_BASE%/%STREAM%"
+:: gap between publishes; avoids ZLM Already publishing when restarting many streams
+timeout /t 1 /nobreak >nul
 goto :eof
