@@ -101,6 +101,25 @@ def _build_urls(app: str, stream: str) -> Dict[str, str]:
     }
 
 
+def _zlm_online_streams() -> Optional[set]:
+    """查询 ZLM 当前在线的 (app, stream) 集合；查询失败返回 None（表示不确定）。"""
+    try:
+        from app.services.zlm_client import zlm_client
+
+        keys = zlm_client.list_online_media_keys()
+    except Exception:
+        logger.warning("取流接口：查询 ZLM 在线流失败，跳过在线判断", exc_info=True)
+        return None
+
+    # list_online_media_keys 返回 "vhost|app|stream"，转成 (app, stream)
+    online: set = set()
+    for key in keys or set():
+        parts = str(key).split("|")
+        if len(parts) >= 3:
+            online.add((parts[-2], parts[-1]))
+    return online
+
+
 # ---------------------------------------------------------------------------
 # 接口
 # ---------------------------------------------------------------------------
@@ -142,6 +161,7 @@ def get_camera_play_url(
 
     person_count_ids = _person_count_camera_ids(db)
     require_task = bool(getattr(settings, "PERSON_COUNT_STREAM_REQUIRE_TASK", True))
+    online_keys = _zlm_online_streams()
 
     streams: List[Dict[str, Any]] = []
     seen: set = set()
@@ -169,6 +189,8 @@ def get_camera_play_url(
                 "flvUrl": urls["flvUrl"],
                 "hlsUrl": urls["hlsUrl"],
                 "rtspUrl": urls["rtspUrl"],
+                # 流当前是否在 ZLM 在线（None=查询失败，无法判断）
+                "online": (None if online_keys is None else (key in online_keys)),
                 "positionDesc": str(getattr(cam, "position_desc", None) or "").strip(),
                 "cameraId": getattr(cam, "id", None),
             }
@@ -182,10 +204,19 @@ def get_camera_play_url(
         )
 
     first = streams[0] if streams else {}
+    online = first.get("online")
+    hint = None
+    if streams and online is False:
+        hint = (
+            "人员计数流已配置但当前未推流（ZLM 上不存在该流），"
+            "播放地址暂时不可用；请确认对应检测任务已在运行"
+        )
     return {
         "cameraCode": code,
         "flvUrl": first.get("flvUrl"),
         "hlsUrl": first.get("hlsUrl"),
         "rtspUrl": first.get("rtspUrl"),
+        "online": online,
+        "hint": hint,
         "streams": streams,
     }

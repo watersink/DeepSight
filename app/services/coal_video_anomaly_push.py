@@ -344,10 +344,15 @@ def push_video_anomaly(
     analysis_case: str,
     data_time: Optional[str] = None,
     images_base64: Optional[Sequence[str]] = None,
+    local_files: Optional[Sequence[str]] = None,
     mine_code: Optional[str] = None,
     valid_camera_codes: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """推送单条视频质量异常记录（便捷入口）。"""
+    """推送单条视频质量异常记录（便捷入口）。
+
+    ``images_base64``：Base64 图片（文档 §6.1），由平台解码后上传其文件服务；
+    ``local_files``：图片 URL（平台文件服务不可用时用它绕开上传环节）。
+    """
     return push_video_anomaly_records(
         [
             {
@@ -355,6 +360,7 @@ def push_video_anomaly(
                 "analysisCase": analysis_case,
                 "dataTime": data_time,
                 "imagesBase64": images_base64,
+                "localFiles": local_files,
                 "mineCode": mine_code,
             }
         ],
