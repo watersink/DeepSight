@@ -1,44 +1,50 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import Pager from "../components/Pager";
 import StreamPlayer from "../components/StreamPlayer";
 
-type Layout = 1 | 4 | 9;
+type Layout = 1 | 4 | 9 | 16;
 
-const LAYOUTS: Layout[] = [1, 4, 9];
+const LAYOUTS: Layout[] = [1, 4, 9, 16];
 const STORAGE_LAYOUT = "live_monitor_layout";
 const STORAGE_SLOTS = "live_monitor_slots";
 
 function loadLayout(): Layout {
   try {
     const n = Number(localStorage.getItem(STORAGE_LAYOUT));
-    if (n === 1 || n === 4 || n === 9) return n;
+    if (n === 1 || n === 4 || n === 9 || n === 16) return n;
   } catch {
     /* ignore */
   }
   return 4;
 }
 
-function loadSlots(size: number): (number | null)[] {
+/** 读取完整槽位列表（可超过当前分屏数，供翻页） */
+function loadSlots(): (number | null)[] {
   try {
     const raw = localStorage.getItem(STORAGE_SLOTS);
-    if (!raw) return Array.from({ length: size }, () => null);
+    if (!raw) return [];
     const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return Array.from({ length: size }, () => null);
-    const next = Array.from({ length: size }, (_, i) => {
-      const v = arr[i];
-      return typeof v === "number" && Number.isFinite(v) ? v : null;
-    });
-    return next;
+    if (!Array.isArray(arr)) return [];
+    return arr.map((v) =>
+      typeof v === "number" && Number.isFinite(v) ? v : null
+    );
   } catch {
-    return Array.from({ length: size }, () => null);
+    return [];
   }
+}
+
+function layoutCols(layout: Layout): number {
+  if (layout === 1) return 1;
+  if (layout === 4) return 2;
+  if (layout === 9) return 3;
+  return 4;
 }
 
 export default function LiveMonitorPage() {
   const [layout, setLayout] = useState<Layout>(loadLayout);
-  const [slots, setSlots] = useState<(number | null)[]>(() =>
-    loadSlots(loadLayout())
-  );
+  const [slots, setSlots] = useState<(number | null)[]>(loadSlots);
+  const [page, setPage] = useState(1);
   const [tasks, setTasks] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -55,6 +61,18 @@ export default function LiveMonitorPage() {
         (t) => t.flv_url && (t.runtime_status === "running" || t.enabled !== false)
       ),
     [tasks]
+  );
+
+  /** 翻页总数：至少一页分屏格数；槽位更多时按槽位长度分页 */
+  const pagerTotal = Math.max(slots.length, layout);
+  const totalPages = Math.max(1, Math.ceil(pagerTotal / layout) || 1);
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const pageStart = (safePage - 1) * layout;
+
+  const pageSlots = useMemo(
+    () =>
+      Array.from({ length: layout }, (_, i) => slots[pageStart + i] ?? null),
+    [layout, slots, pageStart]
   );
 
   const load = useCallback(async () => {
@@ -85,18 +103,21 @@ export default function LiveMonitorPage() {
     }
   }, [layout, slots]);
 
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
   const changeLayout = (next: Layout) => {
     setLayout(next);
-    setSlots((prev) => {
-      const out = Array.from({ length: next }, (_, i) => prev[i] ?? null);
-      return out;
-    });
+    setPage(1);
   };
 
-  const setSlotTask = (index: number, taskId: number | null) => {
+  const setSlotTask = (indexOnPage: number, taskId: number | null) => {
+    const globalIdx = pageStart + indexOnPage;
     setSlots((prev) => {
       const next = [...prev];
-      next[index] = taskId;
+      while (next.length <= globalIdx) next.push(null);
+      next[globalIdx] = taskId;
       return next;
     });
   };
@@ -104,20 +125,22 @@ export default function LiveMonitorPage() {
   const autoFill = () => {
     const candidates = playableTasks.filter((t) => t.flv_url);
     const running = candidates.filter((t) => t.runtime_status === "running");
-    const pool = (running.length ? running : candidates).slice(0, layout);
-    setSlots(
-      Array.from({ length: layout }, (_, i) => (pool[i] ? pool[i].id : null))
-    );
+    const pool = running.length ? running : candidates;
+    setSlots(pool.map((t) => t.id as number));
+    setPage(1);
   };
 
-  const cols = layout === 1 ? 1 : layout === 4 ? 2 : 3;
+  const cols = layoutCols(layout);
 
   return (
     <div className="page-shell live-monitor-page">
       <div className="page-head">
         <div>
           <h1>实时展示</h1>
-          <p>分屏预览任务配置中的识别输出流（需任务已启动并产生 FLV）。</p>
+          <p>
+            分屏预览任务配置中的识别输出流（需任务已启动并产生 FLV）。
+            视频多于当前分屏时，可用底部分页切换。
+          </p>
         </div>
         <div className="toolbar">
           <div className="view-toggle" role="group" aria-label="分屏方式">
@@ -145,16 +168,17 @@ export default function LiveMonitorPage() {
       {error && <p className="error">{error}</p>}
 
       <div
-        className="live-grid"
+        className={`live-grid live-grid-${layout}`}
         style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
       >
-        {slots.map((taskId, idx) => {
+        {pageSlots.map((taskId, idx) => {
+          const globalIdx = pageStart + idx;
           const task = taskId != null ? taskById.get(taskId) : null;
           const flv = task?.flv_url || null;
           return (
-            <section key={`${layout}-${idx}`} className="live-cell">
+            <section key={`${layout}-p${safePage}-${idx}`} className="live-cell">
               <div className="live-cell-head">
-                <span className="live-cell-index">#{idx + 1}</span>
+                <span className="live-cell-index">#{globalIdx + 1}</span>
                 <select
                   value={taskId ?? ""}
                   onChange={(e) => {
@@ -200,6 +224,13 @@ export default function LiveMonitorPage() {
           );
         })}
       </div>
+
+      <Pager
+        page={safePage}
+        pageSize={layout}
+        total={pagerTotal}
+        onChange={setPage}
+      />
     </div>
   );
 }

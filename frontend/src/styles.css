@@ -1040,6 +1040,24 @@ th { color: var(--muted); font-weight: 560; }
   min-height: 140px;
   position: relative;
 }
+.live-grid-16 .live-cell-body {
+  min-height: 96px;
+}
+.live-grid-16 .live-cell-head {
+  padding: 4px 8px;
+}
+.live-grid-16 .live-cell-head select {
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.live-grid-16 .live-cell-foot {
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.live-monitor-page .pager {
+  flex-shrink: 0;
+  margin-top: 10px;
+}
 .live-cell-foot {
   flex-shrink: 0;
   padding: 6px 10px;
