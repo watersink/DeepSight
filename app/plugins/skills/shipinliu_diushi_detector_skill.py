@@ -1,7 +1,8 @@
 """
 视频流丢失检测技能
 
-规则与 shipingdiushi 的三层检测一致，接到实时视频帧上：
+先选定一张该点位的正常基准图，再接到实时视频帧上：
+  - 相对基准图：整幅相似度很低，并且纹理相对基准塌掉（黑屏、占位图、纯色等）
   - 无新帧：两次采样间隔过长
   - 黑屏 / 蓝屏 / 彩条 / 纯色 / 「信号丢失」灰底占位图
   - 花屏：大面积纯色高饱和色块
@@ -25,6 +26,7 @@ if str(_CODE_ROOT) not in sys.path:
 import cv2
 import numpy as np
 
+from app.services.camera_pose_core import compute_ssim, load_image_bgr
 from app.skills.skill_base import BaseSkill, SkillResult
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ _DETAIL_TEXT = {
     "solid_color": "纯色无信号",
     "signal_lost": "无视频信号",
     "macroblock": "色块花屏",
+    "unlike_baseline": "偏离基准画面",
 }
 _REASON_PRIORITY = ("no_frame", "corrupt", "black", "freeze")
 _STATUS_COLOR = {
@@ -228,7 +231,7 @@ def _reason_label(reason: Optional[str], detail: str) -> str:
 
 
 class ShipinliuDiushiDetectorSkill(BaseSkill):
-    """实时视频流丢失检测。不依赖模型，也不需要校准模板。"""
+    """实时视频流丢失检测。用选定的正常基准图判断画面是否整幅丢失。"""
 
     DEFAULT_CONFIG = {
         "type": "detection",
@@ -237,7 +240,8 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
         "version": "1.0",
         "cover_image": f"/skills/{SKILL_NAME}.png",
         "description": (
-            "在实时视频中检测无新帧、黑屏、蓝屏、彩条、纯色、信号丢失占位图、花屏和画面冻结。"
+            "选定一张该点位的正常基准图。当前帧相对基准整幅不像、纹理又塌掉时判为视频丢失；"
+            "同时仍检测无新帧、黑屏、蓝屏、彩条、纯色、信号丢失占位图、花屏和画面冻结。"
             "达到对应持续秒数后告警，恢复需连续正常一段时间。"
             "视频丢失对应煤安 analysisCase=0007，冻结对应 0006。"
         ),
@@ -245,6 +249,14 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
         "run_mode": "stream",
         "required_models": [],
         "form_fields": [
+            {
+                "key": "reference_image_url",
+                "label": "基准画面",
+                "type": "text",
+                "required": True,
+                "default": "",
+                "hint": "选定该点位的一张正常画面。当前帧相对它整幅偏离且纹理塌掉时判为视频丢失。选择摄像头后会自动带入基准模板。",
+            },
             {
                 "key": "check_interval_sec",
                 "label": "采样间隔（秒）",
@@ -258,7 +270,7 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
                 "type": "number",
                 "required": False,
                 "default": 2,
-                "hint": "黑屏、蓝屏、彩条、纯色或信号丢失占位图持续这么久后告警",
+                "hint": "黑屏、蓝屏、彩条、纯色、信号丢失占位图，或相对基准画面整幅偏离，持续这么久后告警",
             },
             {
                 "key": "corrupt_lost_sec",
@@ -293,6 +305,11 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
         "params": {
             "enable_default_sort_tracking": False,
             "enable_timing_log": False,
+            "reference_image_url": "",
+            "baseline_ssim_max": 0.40,
+            "baseline_std_ratio": 0.45,
+            "baseline_std_max": 18.0,
+            "baseline_mad_min": 25.0,
             "check_interval_sec": 0.5,
             "black_suspect_sec": 1.0,
             "black_lost_sec": 2.0,
@@ -340,7 +357,7 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
             {
                 "key": "video_lost",
                 "level": 1,
-                "description": "无新帧、黑屏、无信号占位图或花屏持续达到设定秒数。",
+                "description": "相对基准画面整幅偏离，或无新帧、黑屏、无信号占位图、花屏持续达到设定秒数。",
                 "codes": {
                     "video_lost": {
                         "code": "video_lost",
@@ -383,13 +400,69 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
             "freeze": float(self.params["freeze_lost_sec"]),
         }
         self.alert_definitions: List[Dict[str, Any]] = list(self.config.get("alert_definitions") or [])
+        self.reference_image_url = ""
+        self._reference_gray: Optional[np.ndarray] = None
+        self._last_baseline_ssim: Optional[float] = None
         self._reset_runtime()
+        reference_url = str(self.params.get("reference_image_url") or "").strip()
+        if reference_url:
+            try:
+                self.reload_reference(reference_url)
+            except Exception as e:
+                self.log("warning", f"基准图加载失败: {e}")
+        else:
+            self.log("warning", "未配置基准图，仅按黑屏、花屏、冻结和无新帧判定")
         self.log(
             "info",
             f"初始化视频流丢失检测: interval={self.check_interval_sec}s "
             f"black={self._lost_after['black']}s corrupt={self._lost_after['corrupt']}s "
-            f"freeze={self._lost_after['freeze']}s frame={self._lost_after['no_frame']}s",
+            f"freeze={self._lost_after['freeze']}s frame={self._lost_after['no_frame']}s "
+            f"baseline={'yes' if self._reference_gray is not None else 'no'}",
         )
+
+    def reload_reference(self, url: str) -> None:
+        """加载选定的正常基准图，并清掉尚未确认的丢失计时。"""
+
+        bgr = _as_bgr(load_image_bgr(url))
+        small = _resize_nearest(
+            bgr,
+            int(self.params["sample_width"]),
+            int(self.params["sample_height"]),
+        )
+        self._reference_gray = _bgr_to_gray(small)
+        self.reference_image_url = str(url).strip()
+        self._reset_runtime()
+        self.log(
+            "info",
+            f"已加载视频丢失基准图 std={float(self._reference_gray.std()):.1f} "
+            f"url={self.reference_image_url[:160]}",
+        )
+
+    def _compare_baseline(self, gray_small: np.ndarray) -> Tuple[bool, Optional[float]]:
+        """当前帧相对基准整幅不像，且纹理塌掉，视为视频丢失内容。"""
+
+        reference = self._reference_gray
+        if reference is None:
+            return False, None
+        if reference.shape != gray_small.shape:
+            reference = _resize_nearest(reference, gray_small.shape[1], gray_small.shape[0])
+        current = gray_small.astype(np.float32)
+        anchor = reference.astype(np.float32)
+        ssim = float(compute_ssim(anchor, current))
+        diff = np.abs(current - anchor)
+        mad = float(diff.mean())
+        current_std = float(current.std())
+        reference_std = float(anchor.std())
+        std_limit = min(
+            reference_std * float(self.params["baseline_std_ratio"]),
+            float(self.params["baseline_std_max"]),
+        )
+        lost = (
+            ssim <= float(self.params["baseline_ssim_max"])
+            and current_std <= std_limit
+            and mad >= float(self.params["baseline_mad_min"])
+        )
+        return lost, ssim
 
     def get_required_models(self) -> List[str]:
         return []
@@ -426,6 +499,10 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
             gap = max(0.0, current - self._last_sample_at)
 
         kind, detail, gray_small = classify_loss_frame(current_bgr, self.params)
+        baseline_lost, baseline_ssim = self._compare_baseline(gray_small)
+        self._last_baseline_ssim = baseline_ssim
+        if kind == "ok" and baseline_lost:
+            kind, detail = "black", "unlike_baseline"
         self._update_content_timers(kind, gray_small, current)
         level, reason = self._ranked(current, gap)
         previous = self._state
@@ -572,6 +649,10 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
             "detail": self._detail,
             "message": message,
             "frame_gap_sec": round(gap, 3),
+            "baseline_ssim": (
+                None if self._last_baseline_ssim is None else round(float(self._last_baseline_ssim), 3)
+            ),
+            "reference_ready": self._reference_gray is not None,
             "has_video_lost_alarm": bool(triggered and is_lost),
             "has_freeze_alarm": bool(triggered and is_freeze),
             "recognition_types": recognition,
@@ -670,6 +751,9 @@ class ShipinliuDiushiDetectorSkill(BaseSkill):
             detail = _reason_label(data.get("reason") or None, str(data.get("detail") or ""))
             if status == "normal":
                 detail = "画面有效"
+            ssim = data.get("baseline_ssim")
+            if ssim is not None:
+                detail = f"{detail}  相似度 {float(ssim):.2f}"
             return self._put_status_text(frame, f"识别结果  {title}", (16, 12), color, detail)
         except Exception as e:
             logger.error("绘制视频流丢失结果失败: %s", e)
