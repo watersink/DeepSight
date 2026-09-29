@@ -151,11 +151,14 @@ def _request_client_token() -> str:
 
 
 def get_client_token(force: bool = False) -> str:
-    """获取 client_token（带进程内缓存）。
+    """获取 client_token。
 
     返回形如 ``Bearer xxxxx`` 的完整令牌，可直接放入 ``Authorization`` 请求头。
-    服务端响应不含有效期，本地按 ``COAL_OAUTH_TOKEN_TTL_SECONDS`` 复用，
-    临近过期自动刷新；``force=True`` 时立即重新获取。
+
+    缓存策略由 ``COAL_OAUTH_TOKEN_TTL_SECONDS`` 控制：
+    - **=0 时每次都重新申请 token**（不做任何复用）；
+    - >0 时在有效期内复用，临近过期自动刷新。
+    ``force=True`` 时无论配置如何都立即重新申请。
     """
     now = time.time()
     with _lock:
@@ -163,7 +166,8 @@ def get_client_token(force: bool = False) -> str:
         age = now - _cache["fetched_at"]
         ttl = settings.COAL_OAUTH_TOKEN_TTL_SECONDS
         margin = settings.COAL_OAUTH_TOKEN_REFRESH_MARGIN
-        if token and not force and age < max(ttl - margin, 1):
+        # ttl<=0 视为「每次调用都申请新 token」
+        if token and not force and ttl > 0 and age < max(ttl - margin, 1):
             logger.info(
                 "复用缓存 client_token age=%.1fs ttl=%ss",
                 age,

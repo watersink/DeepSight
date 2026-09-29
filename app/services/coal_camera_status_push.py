@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import httpx
 
+from app.services.coal_push_common import is_auth_failure
 from app.auth.client_token import ClientTokenError, get_auth_header
 from app.core.config import settings
 
@@ -473,7 +474,7 @@ def _post_camera_status_payload(
     try:
         resp = _do_request(force_token=False)
         # token 失效时强制刷新再试一次
-        if resp.status_code in {401, 403}:
+        if is_auth_failure(resp):
             logger.warning(
                 "摄像仪状态推送鉴权失败 status=%s，刷新 token 后重试 count=%s",
                 resp.status_code,

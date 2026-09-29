@@ -30,9 +30,40 @@ class StreamConfig:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+# 各「摄像仪|技能」上次看到的画面人数（用于判定画面人数变化）
+# 背景：部分人数类技能（如 person_count_detector26）只设置过线计数变化标志，
+# 不设置 has_person_count_change，导致「当前在场人数」变化时既不告警也不上报。
+# 这里统一在判定层补齐，使任何输出 flow_metrics.current_person_count 的技能
+# 都能在画面人数变化时触发告警（无需改技能、无需改任务配置）。
+_last_person_count_by_branch: Dict[str, int] = {}
+
+
+def _person_count_changed(data: Dict[str, Any]) -> bool:
+    """画面人数（flow_metrics.current_person_count）相对上次是否变化。"""
+    flow_metrics = data.get("flow_metrics")
+    if not isinstance(flow_metrics, dict):
+        return False
+    raw = flow_metrics.get("current_person_count")
+    if raw is None:
+        return False
+    try:
+        current = int(raw)
+    except (TypeError, ValueError):
+        return False
+
+    branch_key = "|".join(
+        str(data.get(key) or "").strip()
+        for key in ("camera_code", "skill_name", "mine_code")
+    )
+    previous = _last_person_count_by_branch.get(branch_key)
+    _last_person_count_by_branch[branch_key] = current
+    # 首次不做判定（避免启动瞬间产生一次无意义告警）
+    return previous is not None and previous != current
+
+
 def default_alert_predicate(data: Dict[str, Any]) -> bool:
     """默认触发条件：过线计数变化、违规、画面人数变化、过暗/过曝/模糊/视频丢失/摄像头偏移。"""
-    return bool(
+    if (
         data.get("has_enter_count_change")
         or data.get("has_bypass_violation")
         or data.get("has_count_exit_violation")
@@ -46,4 +77,6 @@ def default_alert_predicate(data: Dict[str, Any]) -> bool:
         or data.get("has_doudong_alarm")
         or data.get("has_camera_shift")
         or data.get("has_camera_tilt")
-    )
+    ):
+        return True
+    return _person_count_changed(data)

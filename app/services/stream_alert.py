@@ -99,6 +99,113 @@ _DIRECTION_IN = "01"
 _DIRECTION_OUT = "02"
 # 摄像仪 analysis_type（01=人员计数入井，02=人员计数出井）-> direction 映射
 _ANALYSIS_TYPE_TO_DIRECTION = {"01": _DIRECTION_IN, "02": _DIRECTION_OUT}
+
+
+def _parse_position_map(
+    raw: Optional[str] = None,
+) -> Dict[str, Dict[str, str]]:
+    """解析「多监控点位映射」配置，返回 ``{cameraCode: {code,name,direction}}``。
+
+    配置格式（``COAL_IMPORT_PERSON_COUNT_POSITION_MAP``，多条用 ``;`` 分隔）::
+
+        点位编码|点位名称|摄像仪编码[,摄像仪编码]|方向
+
+    - 点位名称可省略（省略时回退摄像仪 ``position_desc``）；
+    - 方向可省略（省略时回退摄像仪 ``analysis_type`` 映射）；
+    - 一条映射可绑定**多个摄像仪编码**（同一监控点位的入井/出井两条流）；
+    - 格式不合法的条目只记日志并跳过，不影响其它条目。
+    """
+    text = (
+        raw
+        if raw is not None
+        else str(getattr(settings, "COAL_IMPORT_PERSON_COUNT_POSITION_MAP", "") or "")
+    ).strip()
+    if not text:
+        return {}
+
+    mapping: Dict[str, Dict[str, str]] = {}
+    for entry in text.split(";"):
+        item = entry.strip()
+        if not item:
+            continue
+        parts = [p.strip() for p in item.split("|")]
+        if len(parts) < 3:
+            logger.warning(
+                "重要运输设备人数：点位映射条目格式不正确（需 "
+                "点位编码|点位名称|摄像仪编码[|方向]）: %r",
+                item,
+            )
+            continue
+        code = parts[0]
+        name = parts[1] if len(parts) > 1 else ""
+        cameras = parts[2] if len(parts) > 2 else ""
+        direction = parts[3] if len(parts) > 3 else ""
+
+        if code and not _POSITION_CODE_RE.match(code):
+            logger.warning(
+                "重要运输设备人数：点位映射的 positionCode=%r 不是 14 位数字，"
+                "该条仍会使用（请核对附录A.1 编码）",
+                code,
+            )
+        camera_codes = [c.strip() for c in cameras.split(",") if c.strip()]
+        if not camera_codes:
+            logger.warning(
+                "重要运输设备人数：点位映射未指定摄像仪编码，已跳过: %r", item
+            )
+            continue
+        for cam in camera_codes:
+            mapping[cam] = {"code": code, "name": name, "direction": direction}
+    return mapping
+
+
+def _parse_scene_map(raw: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+    """解析「按任务场景映射监控点位」配置，返回 ``{scene_id: {code,name,direction}}``。
+
+    配置格式（``COAL_IMPORT_PERSON_COUNT_SCENE_MAP``，多条用 ``;`` 分隔）::
+
+        场景ID|点位编码|点位名称|方向
+
+    为什么需要它：多台摄像仪可能共用同一个 ``cameraCode``（例如同一编码下
+    挂了闸机口、副立井罐笼等多个检测流），此时按 ``cameraCode`` 无法区分点位；
+    而 ``scene_id`` 在项目中是每个任务唯一的，可精确定位。
+    """
+    text = (
+        raw
+        if raw is not None
+        else str(getattr(settings, "COAL_IMPORT_PERSON_COUNT_SCENE_MAP", "") or "")
+    ).strip()
+    if not text:
+        return {}
+
+    mapping: Dict[str, Dict[str, str]] = {}
+    for entry in text.split(";"):
+        item = entry.strip()
+        if not item:
+            continue
+        parts = [p.strip() for p in item.split("|")]
+        if len(parts) < 2:
+            logger.warning(
+                "重要运输设备人数：场景映射条目格式不正确（需 "
+                "场景ID|点位编码[|点位名称][|方向]）: %r",
+                item,
+            )
+            continue
+        scene = parts[0]
+        code = parts[1]
+        name = parts[2] if len(parts) > 2 else ""
+        direction = parts[3] if len(parts) > 3 else ""
+        if not scene:
+            logger.warning("重要运输设备人数：场景映射缺少场景ID，已跳过: %r", item)
+            continue
+        if code and not _POSITION_CODE_RE.match(code):
+            logger.warning(
+                "重要运输设备人数：场景映射 positionCode=%r 不是 14 位数字，"
+                "该条仍会使用（请核对附录A.1 编码）",
+                code,
+            )
+        mapping[scene] = {"code": code, "name": name, "direction": direction}
+    return mapping
+
 # 需要转发到 importPersonCount 的技能（画面人数 / 重要运输设备实时人数）
 # 仅纳入 count 语义为「真实人数」的技能；
 # 异常检测类（guoan/guobao/mohu/camera_shift/camera_tilt）的 count 是
@@ -146,6 +253,24 @@ _UNDERGROUND_SKILLS = _PERSON_COUNT_SKILLS
 _UNDERGROUND_CAMERA_COUNTS: Dict[str, int] = {}
 # 上次成功上报的井下总人数（仅总人数变化时上报）
 _UNDERGROUND_LAST_TOTAL: Optional[int] = None
+# 井下总人数去抖：待定值 / 该值首次出现时刻 / 开始等待时刻 / 上次成功推送时刻
+_UNDERGROUND_PENDING: Dict[str, Any] = {}
+_UNDERGROUND_WAIT_SINCE: float = 0.0
+_UNDERGROUND_LAST_PUSH_AT: float = 0.0
+
+# ---------------------------------------------------------------------------
+# 重要运输设备人数（§9）去抖状态
+#   检测逐帧抖动（0/1 反复跳变）会造成高频推送刷平台，这里要求人数
+#   稳定 N 秒后才推；若持续抖动超过 max_silence 则强制推一次。
+# ---------------------------------------------------------------------------
+# key = "positionCode|direction" -> 上次成功推送的人数
+_IMPORT_PERSON_COUNT_LAST_PUSHED: Dict[str, int] = {}
+# key -> 上次成功推送的时刻（monotonic）
+_IMPORT_PERSON_COUNT_LAST_PUSH_TIME: Dict[str, float] = {}
+# key -> 当前待推送值开始等待的时刻（用于最长静默兜底）
+_IMPORT_PERSON_COUNT_WAIT_SINCE: Dict[str, float] = {}
+# key -> (待定人数, 该人数首次出现的时刻)
+_IMPORT_PERSON_COUNT_PENDING: Dict[str, Tuple[int, float]] = {}
 
 
 def configure_alert_queue(alert_queue) -> None:
@@ -941,15 +1066,19 @@ def _resolve_position_info(
 ) -> Tuple[str, str, str]:
     """解析 importPersonCount 需要的 (positionName, positionCode, direction)。
 
-    取值优先级：
-    - positionName：事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_POSITION_NAME
-                    > 摄像仪 position_desc
-    - positionCode：事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_POSITION_CODE
-    - direction：   事件字段 > 配置 COAL_IMPORT_PERSON_COUNT_DIRECTION
+    取值优先级（前面优先）：
+    - positionName：事件字段 > 点位映射 COAL_..._POSITION_MAP
+                    > 配置 COAL_..._POSITION_NAME > 摄像仪 position_desc
+    - positionCode：事件字段 > 点位映射 COAL_..._POSITION_MAP
+                    > 配置 COAL_..._POSITION_CODE
+    - direction：   事件字段 > 点位映射 COAL_..._POSITION_MAP
+                    > 配置 COAL_..._DIRECTION
                     > 摄像仪 analysis_type 映射（01->01 入井，02->02 出井）
 
-    即：**显式配置优先于摄像仪自动取值**（配置了就以配置为准），
-    摄像仪字段仅作为未配置时的兜底。
+    **多监控点位必须用 ``COAL_IMPORT_PERSON_COUNT_POSITION_MAP``**
+    （按摄像仪编码区分点位）。因为单个全局 POSITION_CODE 会让所有摄像仪
+    推到同一个点位，而平台按 positionCode 全量替换 → 多点位互相覆盖，
+    最终只有最后一个点位有数据。
 
     本项目库里没有 14 位位置编码，positionCode 为空时必须显式配置，
     否则调用方应跳过推送（不猜、不编，避免把数据挂到错误的点位上）。
@@ -957,6 +1086,28 @@ def _resolve_position_info(
     position_name = str(event.get("position_name") or "").strip()
     position_code = str(event.get("position_code") or "").strip()
     direction = str(event.get("direction") or "").strip()
+
+    # 场景映射优先（scene_id 每任务唯一，可区分共用同一 cameraCode 的点位）
+    scene_key = str(scene or "").strip()
+    if scene_key:
+        scene_mapped = _parse_scene_map().get(scene_key)
+        if scene_mapped:
+            if not position_code:
+                position_code = str(scene_mapped.get("code") or "").strip()
+            if not position_name:
+                position_name = str(scene_mapped.get("name") or "").strip()
+            if not direction:
+                direction = str(scene_mapped.get("direction") or "").strip()
+
+    # 点位映射：按摄像仪编码匹配，支持多监控点位
+    mapped = _parse_position_map().get(str(camera_code or "").strip())
+    if mapped:
+        if not position_code:
+            position_code = str(mapped.get("code") or "").strip()
+        if not position_name:
+            position_name = str(mapped.get("name") or "").strip()
+        if not direction:
+            direction = str(mapped.get("direction") or "").strip()
 
     # 事件字段优先；缺失时用配置覆盖摄像仪自动取值
     if not position_code:
@@ -1113,6 +1264,62 @@ def forward_import_person_count(
         "mineCode": mine_code or None,
     }
 
+    # ── 去抖：人数需稳定一段时间才推送 ──────────────────────────────────
+    # 检测逐帧抖动（画面有人/无人反复）会产生大量「人数变化」事件，
+    # 若每次都推会刷爆平台并使大屏数值闪烁，因此：
+    #   1) 与上次已推送值相同 → 直接跳过；
+    #   2) 新值先记为「待定」，需连续稳定 debounce 秒才推送；
+    #   3) 若持续抖动导致长时间没推成，超过 max_silence 秒强制推一次。
+    debounce = float(
+        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE", 3.0) or 0.0
+    )
+    max_silence = float(
+        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE", 30.0) or 30.0
+    )
+    if debounce > 0:
+        debounce_key = f"{position_code}|{direction}"
+        now = time.monotonic()
+        last_pushed = _IMPORT_PERSON_COUNT_LAST_PUSHED.get(debounce_key)
+
+        # 与已上报值一致 → 撤销等待状态，无需重复推送
+        if last_pushed == person_count:
+            _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+            _IMPORT_PERSON_COUNT_PENDING.pop(debounce_key, None)
+            return None
+
+        # 记录「当前这个待推送值是从什么时候开始等」的基线（用于最长静默兜底）
+        wait_since = _IMPORT_PERSON_COUNT_WAIT_SINCE.get(debounce_key)
+        if wait_since is None:
+            wait_since = now
+            _IMPORT_PERSON_COUNT_WAIT_SINCE[debounce_key] = now
+
+        pending = _IMPORT_PERSON_COUNT_PENDING.get(debounce_key)
+        if pending is None or pending[0] != person_count:
+            # 人数又变了：重新开始稳定计时
+            _IMPORT_PERSON_COUNT_PENDING[debounce_key] = (person_count, now)
+            if (now - wait_since) < max_silence:
+                logger.debug(
+                    "重要运输设备人数：人数=%s 变化中，等待稳定 %.1fs 后再推送 "
+                    "positionCode=%s",
+                    person_count,
+                    debounce,
+                    position_code,
+                )
+                return None
+            # 持续抖动导致长时间未能稳定 → 强制推一次，避免平台长期无数据
+            logger.info(
+                "重要运输设备人数：人数持续抖动，已等待 %.0fs 仍未稳定，"
+                "强制推送一次 positionCode=%s personCount=%s",
+                now - wait_since,
+                position_code,
+                person_count,
+            )
+        else:
+            stable_for = now - pending[1]
+            if stable_for < debounce:
+                # 还没稳定够时间
+                return None
+
     logger.info(
         "重要运输设备人数转发：准备推送 scene=%s positionName=%s positionCode=%s "
         "cameraCode=%s direction=%s personCount=%s mineCode=%s",
@@ -1138,6 +1345,12 @@ def forward_import_person_count(
         return None
 
     if result and result.get("code") == 200:
+        # 仅成功才更新去抖状态，失败允许下次重试
+        if debounce > 0:
+            _IMPORT_PERSON_COUNT_LAST_PUSHED[debounce_key] = person_count
+            _IMPORT_PERSON_COUNT_LAST_PUSH_TIME[debounce_key] = time.monotonic()
+            _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+            _IMPORT_PERSON_COUNT_PENDING.pop(debounce_key, None)
         logger.info(
             "重要运输设备人数转发成功 scene=%s positionCode=%s personCount=%s",
             scene,
@@ -1165,8 +1378,9 @@ def collect_and_forward_person_counts(
         skill_name = str(event.get("skill_name") or "").strip()
         if skill_name in _PERSON_COUNT_SKILLS:
             logger.info(
-                "重要运输设备人数转发：本次无可用人数或缺少必填字段，未推送 "
-                "scene=%s skill=%s count=%s",
+                "重要运输设备人数转发：本次未推送 scene=%s skill=%s count=%s"
+                "（可能原因：去抖等待中 / 人数未变化 / 无可用人数 / "
+                "缺 positionCode 等必填字段 / 转发已禁用）",
                 scene_id or event.get("scene_id"),
                 skill_name,
                 extract_person_count(event),
@@ -1233,6 +1447,41 @@ def forward_underground_count(
         )
         return None
 
+    # ── 去抖：总人数需稳定一段时间才推送（与 §9 同样的防刷屏策略）──────
+    global _UNDERGROUND_LAST_PUSH_AT
+    debounce = float(
+        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE", 3.0) or 0.0
+    )
+    max_silence = float(
+        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE", 30.0) or 30.0
+    )
+    if debounce > 0:
+        global _UNDERGROUND_WAIT_SINCE
+        now_mono = time.monotonic()
+        if not _UNDERGROUND_WAIT_SINCE:
+            _UNDERGROUND_WAIT_SINCE = now_mono
+        pending_value = _UNDERGROUND_PENDING.get("value")
+        pending_since = float(_UNDERGROUND_PENDING.get("since") or 0.0)
+        if pending_value != total_count:
+            _UNDERGROUND_PENDING["value"] = total_count
+            _UNDERGROUND_PENDING["since"] = now_mono
+            # 距「开始等待」已超最长静默 → 强制推一次，避免平台长期无数据
+            if (now_mono - _UNDERGROUND_WAIT_SINCE) < max_silence:
+                logger.debug(
+                    "井下人数转发：总人数=%s 变化中，等待稳定 %.1fs 后再推送",
+                    total_count,
+                    debounce,
+                )
+                return None
+            logger.info(
+                "井下人数转发：总人数持续抖动（已等 %.0fs 未稳定），"
+                "强制推送一次 total=%s",
+                now_mono - _UNDERGROUND_WAIT_SINCE,
+                total_count,
+            )
+        elif (now_mono - pending_since) < debounce:
+            return None
+
     data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
@@ -1276,6 +1525,10 @@ def forward_underground_count(
     # 仅成功才记录，失败允许下次重试
     if result and result.get("code") == 200:
         _UNDERGROUND_LAST_TOTAL = total_count
+        if debounce > 0:
+            _UNDERGROUND_LAST_PUSH_AT = time.monotonic()
+            _UNDERGROUND_WAIT_SINCE = 0.0
+            _UNDERGROUND_PENDING.clear()
         logger.info(
             "井下人数转发成功 scene=%s cameraCode=%s 总人数=%s（上次=%s）",
             scene,

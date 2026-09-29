@@ -315,7 +315,8 @@ class Settings(BaseSettings):
         default="",
         description=(
             "监控点位编码（14 位，参照附录A.1 矿井位置编码）；"
-            "为空时该转发会跳过并记日志（缺必填字段不推送）"
+            "为空时该转发会跳过并记日志（缺必填字段不推送）。"
+            "多个监控点位请改用 COAL_IMPORT_PERSON_COUNT_POSITION_MAP"
         ),
     )
     COAL_IMPORT_PERSON_COUNT_POSITION_NAME: str = Field(
@@ -326,6 +327,42 @@ class Settings(BaseSettings):
         default="",
         description=(
             "出入井方向（01=入井，02=出井）；为空时取摄像仪 analysis_type 映射"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_POSITION_MAP: str = Field(
+        default="",
+        description=(
+            "【多监控点位映射】按摄像仪编码区分不同的监控点位，"
+            "解决平台按 positionCode 全量替换时多点位互相覆盖的问题。"
+            "格式（多条用 ; 分隔）：点位编码|点位名称|摄像仪编码[,摄像仪编码]|方向。"
+            "方向可省略；点位名称可省略（省略时取摄像仪 position_desc）。"
+            "匹配到映射后优先于 COAL_IMPORT_PERSON_COUNT_POSITION_CODE 生效。"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE: float = Field(
+        default=3.0,
+        ge=0.0,
+        description=(
+            "人数去抖秒数：人数需稳定该秒数后才推送，避免检测逐帧抖动"
+            "（0/1 反复跳变）导致高频刷平台。0=不去抖"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_SCENE_MAP: str = Field(
+        default="",
+        description=(
+            "【按任务场景映射监控点位】场景ID在项目中唯一（每个任务一个），"
+            "当多台摄像仪共用同一 cameraCode 无法区分点位时，用场景ID精确定位。"
+            "格式（多条用 ; 分隔）：场景ID|点位编码|点位名称|方向。"
+            "例：scene_0011|12345678901236|副立井（罐笼）|01。"
+            "优先级：事件字段 > 场景映射 > 摄像仪映射(POSITION_MAP) > 全局配置"
+        ),
+    )
+    COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE: float = Field(
+        default=30.0,
+        ge=1.0,
+        description=(
+            "最长静默秒数：人数持续抖动导致去抖一直不满足时，"
+            "超过该秒数强制推送一次，避免平台上数据长期不更新"
         ),
     )
 
@@ -353,8 +390,12 @@ class Settings(BaseSettings):
     )
     COAL_OAUTH_TOKEN_TTL_SECONDS: int = Field(
         default=3600,
-        ge=10,
-        description="client_token 本地缓存时长（秒）",
+        ge=0,
+        description=(
+            "client_token 本地缓存时长（秒）。"
+            "0 = 每次调用平台接口都重新申请 token（不复用缓存）；"
+            ">0 = 该时长内复用，临近过期自动刷新"
+        ),
     )
     COAL_OAUTH_TOKEN_REFRESH_MARGIN: int = Field(
         default=5,

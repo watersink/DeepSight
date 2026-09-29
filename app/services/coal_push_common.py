@@ -144,6 +144,29 @@ def dedupe_by_key(
 # HTTP 提交（含 token 失效重试）
 # ---------------------------------------------------------------------------
 
+def is_auth_failure(resp) -> bool:
+    """判断响应是否为鉴权失败。
+
+    煤安平台鉴权失败时可能返回 **HTTP 200 + body {"code":401,...}**
+    （例如 client_token 过期），因此不能只看 HTTP 状态码，
+    否则不会触发刷新重试，导致该次推送静默丢失。
+    """
+    status = getattr(resp, "status_code", 0) or 0
+    if status in (401, 403):
+        return True
+    try:
+        body = resp.json()
+    except Exception:
+        return False
+    if not isinstance(body, dict):
+        return False
+    code = body.get("code")
+    try:
+        return int(code) in (401, 403)
+    except (TypeError, ValueError):
+        return False
+
+
 def post_json_array(
     url: str,
     payload: List[Dict[str, Any]],
@@ -181,9 +204,10 @@ def post_json_array(
 
     try:
         resp = _do_request(force_token=False)
-        if resp.status_code in {401, 403}:
+        # 平台鉴权失败可能是 HTTP 200 + body code=401，必须一并判断
+        if is_auth_failure(resp):
             logger.warning(
-                "%s 鉴权失败 status=%s，刷新 token 后重试 count=%s",
+                "%s 鉴权失败 http=%s（可能 token 已过期），刷新 token 后重试 count=%s",
                 label,
                 resp.status_code,
                 len(payload),
