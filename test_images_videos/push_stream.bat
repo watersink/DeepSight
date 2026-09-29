@@ -41,6 +41,7 @@ call :push "guoan.mp4" "guoan"
 call :push "freeze.mp4" "freeze"
 call :push "doudong.mp4" "doudong"
 call :push "diushi.mp4" "diushi"
+call :push "fenbianlv.mp4" "fenbianlv"
 
 echo.
 echo All push windows started minimized.
