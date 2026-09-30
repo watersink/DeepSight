@@ -272,8 +272,217 @@ _IMPORT_PERSON_COUNT_LAST_PUSHED: Dict[str, int] = {}
 _IMPORT_PERSON_COUNT_LAST_PUSH_TIME: Dict[str, float] = {}
 # key -> 当前待推送值开始等待的时刻（用于最长静默兜底）
 _IMPORT_PERSON_COUNT_WAIT_SINCE: Dict[str, float] = {}
-# key -> (待定人数, 该人数首次出现的时刻)
-_IMPORT_PERSON_COUNT_PENDING: Dict[str, Tuple[int, float]] = {}
+# key -> {record, person_count, since, ...} 待推送记录（稳定后由定时器补推）
+_IMPORT_PERSON_COUNT_PENDING: Dict[str, Dict[str, Any]] = {}
+# key -> 已安排的补推定时器（短生命周期；值再变化时取消并重排）
+_IMPORT_PERSON_COUNT_TIMERS: Dict[str, threading.Timer] = {}
+
+# ---------------------------------------------------------------------------
+# 人数去抖补推（§8 井下人数 / §9 重要运输设备人数共用）
+#   检测侧「人数只在变化的那一刻产生 1 个事件」，所以不能用「同值事件再来
+#   一次」判定稳定：否则新值会一直停在待定状态，平台上的数据再也不更新。
+#   这里改为：变化先记入待定，并安排一个「稳定 debounce 秒后触发」的一次性
+#   定时器；值再变化就取消重排；持续抖动超过 max_silence 秒则当场强推一次。
+#   用一次性定时器而非常驻线程 + 互斥锁：fork 出推流子进程时不会继承到
+#   「已被父进程锁住」的锁，也不会重复补推父进程留下的待定值。
+# ---------------------------------------------------------------------------
+_UNDERGROUND_TIMER: Optional[threading.Timer] = None
+
+
+def _person_count_debounce() -> float:
+    try:
+        return max(
+            float(
+                getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE", 3.0)
+                or 0.0
+            ),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 3.0
+
+
+def _person_count_max_silence() -> float:
+    try:
+        return max(
+            float(
+                getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE", 30.0)
+                or 30.0
+            ),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def _cancel_import_person_count_flush(debounce_key: str) -> None:
+    timer = _IMPORT_PERSON_COUNT_TIMERS.pop(debounce_key, None)
+    if timer is not None:
+        timer.cancel()
+
+
+def _schedule_import_person_count_flush(
+    debounce_key: str, entry: Dict[str, Any], delay: float
+) -> None:
+    """安排一次「稳定后补推」；同一 key 只保留最新一个定时器。"""
+    _cancel_import_person_count_flush(debounce_key)
+    timer = threading.Timer(
+        max(delay, 0.0),
+        _flush_import_person_count_key,
+        args=(debounce_key, entry),
+    )
+    timer.daemon = True
+    _IMPORT_PERSON_COUNT_TIMERS[debounce_key] = timer
+    timer.start()
+
+
+def _push_import_person_count_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """执行一次 importPersonCount 推送；成功时更新去抖状态。"""
+    record = entry.get("record") or {}
+    debounce_key = str(entry.get("key") or "")
+    position_code = str(record.get("positionCode") or "")
+    person_count = entry.get("person_count")
+
+    logger.info(
+        "重要运输设备人数转发：准备推送 scene=%s positionName=%s positionCode=%s "
+        "cameraCode=%s direction=%s personCount=%s mineCode=%s",
+        entry.get("scene"),
+        record.get("positionName"),
+        position_code,
+        record.get("cameraCode"),
+        record.get("direction"),
+        person_count,
+        record.get("mineCode"),
+    )
+
+    try:
+        from app.services.coal_import_person_count_push import (
+            push_import_person_count_records,
+        )
+
+        result = push_import_person_count_records([record])
+    except Exception:
+        logger.exception(
+            "重要运输设备人数转发失败 scene=%s positionCode=%s",
+            entry.get("scene"),
+            position_code,
+        )
+        return None
+
+    if result and result.get("code") == 200:
+        # 仅成功才更新去抖状态，失败允许下次重试
+        try:
+            _IMPORT_PERSON_COUNT_LAST_PUSHED[debounce_key] = int(person_count)
+        except (TypeError, ValueError):
+            pass
+        _IMPORT_PERSON_COUNT_LAST_PUSH_TIME[debounce_key] = time.monotonic()
+        _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+        logger.info(
+            "重要运输设备人数转发成功 scene=%s positionCode=%s personCount=%s",
+            entry.get("scene"),
+            position_code,
+            person_count,
+        )
+    return result
+
+
+def _flush_import_person_count_key(debounce_key: str, entry: Dict[str, Any]) -> None:
+    """定时器到点：把这条待定人数补推到 importPersonCount。"""
+    if _IMPORT_PERSON_COUNT_PENDING.get(debounce_key) is not entry:
+        # 已被更新的值替换（新定时器已安排），本次作废
+        return
+    _IMPORT_PERSON_COUNT_PENDING.pop(debounce_key, None)
+    _cancel_import_person_count_flush(debounce_key)
+    if _IMPORT_PERSON_COUNT_LAST_PUSHED.get(debounce_key) == entry.get("person_count"):
+        # 该值已经推过（例如别的事件已触发推送），无需重复推送
+        _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+        return
+    result = _push_import_person_count_entry(entry)
+    if result and result.get("code") == 200:
+        _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+        return
+    # 失败：放回待定，等下一个窗口再重试（避免高频重试）
+    entry["since"] = time.monotonic()
+    _IMPORT_PERSON_COUNT_PENDING[debounce_key] = entry
+    _schedule_import_person_count_flush(
+        debounce_key, entry, _person_count_debounce() or 1.0
+    )
+
+
+def _push_underground_count_entry(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """执行一次 undergroundCount 推送；成功时更新去抖状态。"""
+    global _UNDERGROUND_LAST_PUSH_AT, _UNDERGROUND_LAST_TOTAL, _UNDERGROUND_WAIT_SINCE
+
+    try:
+        from app.services.coal_underground_count_push import (
+            push_underground_count_records,
+        )
+
+        result = push_underground_count_records([entry.get("record") or {}])
+    except Exception:
+        logger.exception(
+            "井下人数转发失败 scene=%s cameraCode=%s total=%s",
+            entry.get("scene"),
+            entry.get("camera_code"),
+            entry.get("total_count"),
+        )
+        return None
+
+    if result and result.get("code") == 200:
+        # 仅成功才记录，失败允许下次重试
+        try:
+            _UNDERGROUND_LAST_TOTAL = int(entry.get("total_count") or 0)
+        except (TypeError, ValueError):
+            _UNDERGROUND_LAST_TOTAL = 0
+        _UNDERGROUND_LAST_PUSH_AT = time.monotonic()
+        _UNDERGROUND_WAIT_SINCE = 0.0
+        logger.info(
+            "井下人数转发成功 scene=%s cameraCode=%s 总人数=%s",
+            entry.get("scene"),
+            entry.get("camera_code"),
+            entry.get("total_count"),
+        )
+    return result
+
+
+def _cancel_underground_flush() -> None:
+    global _UNDERGROUND_TIMER
+    timer = _UNDERGROUND_TIMER
+    _UNDERGROUND_TIMER = None
+    if timer is not None:
+        timer.cancel()
+
+
+def _schedule_underground_flush(delay: float) -> None:
+    """安排一次「总人数稳定后补推」；只保留最新一个定时器。"""
+    global _UNDERGROUND_TIMER
+    _cancel_underground_flush()
+    timer = threading.Timer(max(delay, 0.0), _flush_pending_underground_count)
+    timer.daemon = True
+    _UNDERGROUND_TIMER = timer
+    timer.start()
+
+
+def _flush_pending_underground_count() -> None:
+    """定时器到点：把待定的井下总人数补推到 undergroundCount。"""
+    global _UNDERGROUND_TIMER, _UNDERGROUND_WAIT_SINCE
+    _UNDERGROUND_TIMER = None
+    entry = dict(_UNDERGROUND_PENDING)
+    _UNDERGROUND_PENDING.clear()
+    if not entry or not entry.get("record"):
+        return
+    if _UNDERGROUND_LAST_TOTAL is not None and _UNDERGROUND_LAST_TOTAL == entry.get(
+        "total_count"
+    ):
+        _UNDERGROUND_WAIT_SINCE = 0.0
+        return
+    result = _push_underground_count_entry(entry)
+    if result and result.get("code") == 200:
+        return
+    # 失败：放回待定，等下一个窗口再重试
+    entry["since"] = time.monotonic()
+    _UNDERGROUND_PENDING.update(entry)
+    _schedule_underground_flush(_person_count_debounce() or 1.0)
 
 
 def configure_alert_queue(alert_queue) -> None:
@@ -1269,100 +1478,59 @@ def forward_import_person_count(
         "mineCode": mine_code or None,
     }
 
-    # ── 去抖：人数需稳定一段时间才推送 ──────────────────────────────────
-    # 检测逐帧抖动（画面有人/无人反复）会产生大量「人数变化」事件，
-    # 若每次都推会刷爆平台并使大屏数值闪烁，因此：
+    # ── 去抖：人数稳定一段时间后再推送 ──────────────────────────────────
+    # 检测侧只在「人数变化」那一刻产生 1 个事件，不能依赖「同值事件再来一次」
+    # 判定稳定（否则新值永远停在待定状态、平台数据不再更新），因此：
     #   1) 与上次已推送值相同 → 直接跳过；
-    #   2) 新值先记为「待定」，需连续稳定 debounce 秒才推送；
-    #   3) 若持续抖动导致长时间没推成，超过 max_silence 秒强制推一次。
-    debounce = float(
-        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE", 3.0) or 0.0
-    )
-    max_silence = float(
-        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE", 30.0) or 30.0
-    )
+    #   2) 新值记入「待定」，安排一个 debounce 秒后触发的补推定器；
+    #   3) 持续抖动超过 max_silence 秒 → 当场强推一次，避免平台长期无数据。
+    debounce = _person_count_debounce()
+    debounce_key = f"{position_code}|{direction}"
+    entry: Dict[str, Any] = {
+        "key": debounce_key,
+        "scene": scene,
+        "record": record,
+        "person_count": person_count,
+        "since": time.monotonic(),
+    }
     if debounce > 0:
-        debounce_key = f"{position_code}|{direction}"
-        now = time.monotonic()
-        last_pushed = _IMPORT_PERSON_COUNT_LAST_PUSHED.get(debounce_key)
-
         # 与已上报值一致 → 撤销等待状态，无需重复推送
-        if last_pushed == person_count:
-            _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
+        if _IMPORT_PERSON_COUNT_LAST_PUSHED.get(debounce_key) == person_count:
+            _cancel_import_person_count_flush(debounce_key)
             _IMPORT_PERSON_COUNT_PENDING.pop(debounce_key, None)
+            _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
             return None
 
-        # 记录「当前这个待推送值是从什么时候开始等」的基线（用于最长静默兜底）
+        # 记录「本轮等待」的起点（用于最长静默兜底）
         wait_since = _IMPORT_PERSON_COUNT_WAIT_SINCE.get(debounce_key)
         if wait_since is None:
-            wait_since = now
-            _IMPORT_PERSON_COUNT_WAIT_SINCE[debounce_key] = now
+            wait_since = entry["since"]
+            _IMPORT_PERSON_COUNT_WAIT_SINCE[debounce_key] = wait_since
+        _IMPORT_PERSON_COUNT_PENDING[debounce_key] = entry
 
-        pending = _IMPORT_PERSON_COUNT_PENDING.get(debounce_key)
-        if pending is None or pending[0] != person_count:
-            # 人数又变了：重新开始稳定计时
-            _IMPORT_PERSON_COUNT_PENDING[debounce_key] = (person_count, now)
-            if (now - wait_since) < max_silence:
-                logger.debug(
-                    "重要运输设备人数：人数=%s 变化中，等待稳定 %.1fs 后再推送 "
-                    "positionCode=%s",
-                    person_count,
-                    debounce,
-                    position_code,
-                )
-                return None
+        max_silence = _person_count_max_silence()
+        if max_silence > 0 and (entry["since"] - wait_since) >= max_silence:
             # 持续抖动导致长时间未能稳定 → 强制推一次，避免平台长期无数据
             logger.info(
                 "重要运输设备人数：人数持续抖动，已等待 %.0fs 仍未稳定，"
                 "强制推送一次 positionCode=%s personCount=%s",
-                now - wait_since,
+                entry["since"] - wait_since,
                 position_code,
                 person_count,
             )
-        else:
-            stable_for = now - pending[1]
-            if stable_for < debounce:
-                # 还没稳定够时间
-                return None
+            _flush_import_person_count_key(debounce_key, entry)
+            return None
 
-    logger.info(
-        "重要运输设备人数转发：准备推送 scene=%s positionName=%s positionCode=%s "
-        "cameraCode=%s direction=%s personCount=%s mineCode=%s",
-        scene,
-        position_name,
-        position_code,
-        camera_code,
-        direction,
-        person_count,
-        mine_code,
-    )
-
-    try:
-        from app.services.coal_import_person_count_push import (
-            push_import_person_count_records,
-        )
-
-        result = push_import_person_count_records([record])
-    except Exception:
-        logger.exception(
-            "重要运输设备人数转发失败 scene=%s positionCode=%s", scene, position_code
+        _schedule_import_person_count_flush(debounce_key, entry, debounce)
+        logger.debug(
+            "重要运输设备人数：人数=%s 已记入待定，稳定 %.1fs 后补推 positionCode=%s",
+            person_count,
+            debounce,
+            position_code,
         )
         return None
 
-    if result and result.get("code") == 200:
-        # 仅成功才更新去抖状态，失败允许下次重试
-        if debounce > 0:
-            _IMPORT_PERSON_COUNT_LAST_PUSHED[debounce_key] = person_count
-            _IMPORT_PERSON_COUNT_LAST_PUSH_TIME[debounce_key] = time.monotonic()
-            _IMPORT_PERSON_COUNT_WAIT_SINCE.pop(debounce_key, None)
-            _IMPORT_PERSON_COUNT_PENDING.pop(debounce_key, None)
-        logger.info(
-            "重要运输设备人数转发成功 scene=%s positionCode=%s personCount=%s",
-            scene,
-            position_code,
-            person_count,
-        )
-    return result
+    return _push_import_person_count_entry(entry)
 
 
 def collect_and_forward_person_counts(
@@ -1413,7 +1581,7 @@ def forward_underground_count(
     按冗余规则产生 ``analysis_type=12`` 报警、SSE（事件名 ``undergroundCount``）。
     失败只记日志，不影响原有告警流程。
     """
-    global _UNDERGROUND_LAST_TOTAL
+    global _UNDERGROUND_LAST_TOTAL, _UNDERGROUND_WAIT_SINCE
     scene = str(scene_id or event.get("scene_id") or "").strip()
 
     if not bool(getattr(settings, "COAL_UNDERGROUND_COUNT_FORWARD_ENABLED", True)):
@@ -1444,6 +1612,10 @@ def forward_underground_count(
     # 仅总人数发生变化时上报（首次也上报）
     prev_total = _UNDERGROUND_LAST_TOTAL
     if prev_total is not None and prev_total == total_count:
+        # 总人数回到「已推送值」：撤销可能存在的待定值，避免旧值被补推
+        _cancel_underground_flush()
+        _UNDERGROUND_PENDING.clear()
+        _UNDERGROUND_WAIT_SINCE = 0.0
         logger.debug(
             "井下人数转发：总人数未变化（%s 人），跳过 cameraCode=%s（本机 %s 人）",
             total_count,
@@ -1452,44 +1624,54 @@ def forward_underground_count(
         )
         return None
 
-    # ── 去抖：总人数需稳定一段时间才推送（与 §9 同样的防刷屏策略）──────
-    global _UNDERGROUND_LAST_PUSH_AT
-    debounce = float(
-        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_DEBOUNCE", 3.0) or 0.0
+    data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
     )
-    max_silence = float(
-        getattr(settings, "COAL_IMPORT_PERSON_COUNT_FORWARD_MAX_SILENCE", 30.0) or 30.0
-    )
+    record: Dict[str, Any] = {
+        "cameraCode": camera_code,
+        "analysisCase": f"{total_count:04d}",
+        "dataTime": data_time,
+        "mineCode": mine_code or None,
+    }
+
+    # ── 去抖：总人数稳定后再推送（与 §9 同一套「稳定后补推」机制）──────
+    # 同 §9：单次「总人数变化」事件不能被当成不稳定值吞掉，
+    # 因此先记入待定，并安排一个 debounce 秒后触发的补推定器。
+    debounce = _person_count_debounce()
     if debounce > 0:
-        global _UNDERGROUND_WAIT_SINCE
         now_mono = time.monotonic()
         if not _UNDERGROUND_WAIT_SINCE:
             _UNDERGROUND_WAIT_SINCE = now_mono
-        pending_value = _UNDERGROUND_PENDING.get("value")
-        pending_since = float(_UNDERGROUND_PENDING.get("since") or 0.0)
-        if pending_value != total_count:
+        if _UNDERGROUND_PENDING.get("value") != total_count:
             _UNDERGROUND_PENDING["value"] = total_count
             _UNDERGROUND_PENDING["since"] = now_mono
-            # 距「开始等待」已超最长静默 → 强制推一次，避免平台长期无数据
-            if (now_mono - _UNDERGROUND_WAIT_SINCE) < max_silence:
-                logger.debug(
-                    "井下人数转发：总人数=%s 变化中，等待稳定 %.1fs 后再推送",
-                    total_count,
-                    debounce,
-                )
-                return None
+        _UNDERGROUND_PENDING.update(
+            {
+                "record": record,
+                "scene": scene,
+                "camera_code": camera_code,
+                "total_count": total_count,
+            }
+        )
+        max_silence = _person_count_max_silence()
+        if max_silence > 0 and (now_mono - _UNDERGROUND_WAIT_SINCE) >= max_silence:
+            # 持续抖动导致长时间未能稳定 → 强制推一次，避免平台长期无数据
             logger.info(
                 "井下人数转发：总人数持续抖动（已等 %.0fs 未稳定），"
                 "强制推送一次 total=%s",
                 now_mono - _UNDERGROUND_WAIT_SINCE,
                 total_count,
             )
-        elif (now_mono - pending_since) < debounce:
+            _flush_pending_underground_count()
             return None
+        _schedule_underground_flush(debounce)
+        logger.debug(
+            "井下人数转发：总人数=%s 已记入待定，稳定 %.1fs 后补推",
+            total_count,
+            debounce,
+        )
+        return None
 
-    data_time = str(event.get("time") or "").strip() or datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
     logger.info(
         "井下人数转发：准备推送 scene=%s cameraCode=%s（变化来源）"
         "总人数=%s（上次=%s）本机人数=%s（上次=%s）参与摄像仪=%s mineCode=%s",
@@ -1502,46 +1684,14 @@ def forward_underground_count(
         len(_UNDERGROUND_CAMERA_COUNTS),
         mine_code,
     )
-
-    try:
-        from app.services.coal_underground_count_push import (
-            push_underground_count_records,
-        )
-
-        result = push_underground_count_records(
-            [
-                {
-                    "cameraCode": camera_code,
-                    "analysisCase": f"{total_count:04d}",
-                    "dataTime": data_time,
-                    "mineCode": mine_code or None,
-                }
-            ]
-        )
-    except Exception:
-        logger.exception(
-            "井下人数转发失败 scene=%s cameraCode=%s total=%s",
-            scene,
-            camera_code,
-            total_count,
-        )
-        return None
-
-    # 仅成功才记录，失败允许下次重试
-    if result and result.get("code") == 200:
-        _UNDERGROUND_LAST_TOTAL = total_count
-        if debounce > 0:
-            _UNDERGROUND_LAST_PUSH_AT = time.monotonic()
-            _UNDERGROUND_WAIT_SINCE = 0.0
-            _UNDERGROUND_PENDING.clear()
-        logger.info(
-            "井下人数转发成功 scene=%s cameraCode=%s 总人数=%s（上次=%s）",
-            scene,
-            camera_code,
-            total_count,
-            prev_total,
-        )
-    return result
+    return _push_underground_count_entry(
+        {
+            "scene": scene,
+            "camera_code": camera_code,
+            "total_count": total_count,
+            "record": record,
+        }
+    )
 
 
 def forward_camera_status(
@@ -1795,7 +1945,11 @@ def default_alert_handler(data, raw_frame, scene_id):
 
     # 视频质量异常（画面过暗/摄像仪挪动等）转发煤安平台 /mine/ai/videoAnomaly
     # 带本次告警帧作为证据图片；内部有冷却，失败不影响后续流程
-    anomaly_result = forward_video_anomaly_alerts(event, raw_frame, scene_id=scene_id)
+    try:
+        anomaly_result = forward_video_anomaly_alerts(event, raw_frame, scene_id=scene_id)
+    except Exception:
+        logger.exception("视频质量异常转发异常（不影响其他推送） scene=%s", scene_id)
+        anomaly_result = None
     if anomaly_result:
         logger.info(
             "视频质量异常转发结果 scene=%s pushed=%s uploaded=%s code=%s msg=%s",
@@ -1817,7 +1971,11 @@ def default_alert_handler(data, raw_frame, scene_id):
     # 缺必填字段（positionCode 需 14 位、direction 需 01/02）则跳过并记日志。
     # 异常检测类技能（guoan/guobao/mohu/camera_shift/camera_tilt）的 count
     # 是告警标志而非人数，已在 _PERSON_COUNT_SKILLS 中排除。
-    person_count_result = collect_and_forward_person_counts(event, scene_id=scene_id)
+    try:
+        person_count_result = collect_and_forward_person_counts(event, scene_id=scene_id)
+    except Exception:
+        logger.exception("重要运输设备人数转发异常（不影响其他推送） scene=%s", scene_id)
+        person_count_result = None
     if person_count_result:
         logger.info(
             "监控点位实时人数转发结果 scene=%s skill=%s personCount=%s "
@@ -1833,7 +1991,11 @@ def default_alert_handler(data, raw_frame, scene_id):
     # ── 井下人数不符转发（对接文档 §8）────────────────────────────────
     # 该摄像仪人数发生变化时上报，cameraCode 带人数变化的那台摄像仪；
     # 平台侧据此与人员定位系统比对并产生 analysis_type=12 报警
-    underground_result = forward_underground_count(event, scene_id=scene_id)
+    try:
+        underground_result = forward_underground_count(event, scene_id=scene_id)
+    except Exception:
+        logger.exception("井下人数转发异常（不影响其他推送） scene=%s", scene_id)
+        underground_result = None
     if underground_result:
         logger.info(
             "井下人数转发结果 scene=%s cameraCode=%s personCount=%s code=%s msg=%s",
@@ -1847,9 +2009,13 @@ def default_alert_handler(data, raw_frame, scene_id):
     # ── 摄像仪状态转发（对接文档 §5）────────────────────────────────────
     # 能产生告警说明该摄像仪在线，实时上报 cameraStatus=1
     # （同状态 60s 内节流；离线状态由 5 分钟定时全量任务按 ZLM 判定）
-    camera_status_result = forward_camera_status(
-        event, _CAMERA_STATUS_ONLINE, scene_id=scene_id
-    )
+    try:
+        camera_status_result = forward_camera_status(
+            event, _CAMERA_STATUS_ONLINE, scene_id=scene_id
+        )
+    except Exception:
+        logger.exception("摄像仪状态转发异常（不影响其他推送） scene=%s", scene_id)
+        camera_status_result = None
     if camera_status_result:
         logger.info(
             "摄像仪状态转发结果 scene=%s cameraCode=%s code=%s msg=%s",
