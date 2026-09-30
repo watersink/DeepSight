@@ -8,6 +8,7 @@ import ModelsPage from "./pages/ModelsPage";
 import AlgorithmsPage from "./pages/AlgorithmsPage";
 import TasksPage from "./pages/TasksPage";
 import LiveMonitorPage from "./pages/LiveMonitorPage";
+import WallScreenPage from "./pages/WallScreenPage";
 import AlertsPage from "./pages/AlertsPage";
 import EventsPage from "./pages/EventsPage";
 import UsersPage from "./pages/UsersPage";
@@ -32,6 +33,7 @@ const navItems: NavEntry[] = [
   { to: "/algorithms", label: "算法管理" },
   { to: "/tasks", label: "任务配置" },
   { to: "/live", label: "实时展示" },
+  { to: "/wall", label: "监控大屏" },
   { to: "/events", label: "事件管理" },
   { to: "/alerts", label: "报警管理" },
   { to: "/assistant", label: "大模型助手" },
@@ -205,6 +207,14 @@ export default function App() {
       <BrandingProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/wall"
+            element={
+              <RequireAuth>
+                <WallScreenPage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/*"
             element={
