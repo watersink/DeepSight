@@ -570,10 +570,7 @@ class PersonPresenceDetector26Skill(BaseSkill):
                         color = track_color_map[track_id]
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
 
-                    if track_id is not None:
-                        label = f"ID:{track_id} {class_name}: {confidence:.2f}"
-                    else:
-                        label = f"{class_name}: {confidence:.2f}"
+                    label = f"{class_name}: {confidence:.2f}"
                     (text_width, text_height), baseline = cv2.getTextSize(
                         label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
                     )
