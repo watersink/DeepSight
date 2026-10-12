@@ -75,7 +75,7 @@ class Settings(BaseSettings):
         description="对外 RTSP 端口；省略则与 ZLM_RTSP_PORT 相同",
     )
     ZLM_SECRET: str = Field(
-        default="b1CXeSHhB1AcYV5Hmf9e9h7nyHXsI9Tm",
+        default="tcH2d3uET7YjhVW4SLGo6eztESOQVW2P",
         description="ZLMediaKit HTTP API 密钥（config.ini [api] secret）",
     )
     ZLM_DEFAULT_VHOST: str = Field(
