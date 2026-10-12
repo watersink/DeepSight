@@ -17,20 +17,92 @@
 """
 from __future__ import print_function
 
-import os
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from skimage import io
 
-import glob
-import time
-import argparse
-from filterpy.kalman import KalmanFilter
+
+class _KalmanFilter(object):
+    """SORT 用的常速度卡尔曼滤波，避免依赖 filterpy。"""
+
+    def __init__(self, dim_x, dim_z):
+        self.dim_x = dim_x
+        self.dim_z = dim_z
+        self.x = np.zeros((dim_x, 1))
+        self.P = np.eye(dim_x)
+        self.Q = np.eye(dim_x)
+        self.F = np.eye(dim_x)
+        self.H = np.zeros((dim_z, dim_x))
+        self.R = np.eye(dim_z)
+
+    def predict(self):
+        self.x = np.dot(self.F, self.x)
+        self.P = np.dot(np.dot(self.F, self.P), self.F.T) + self.Q
+        return self.x
+
+    def update(self, z):
+        z = np.asarray(z, dtype=float).reshape(self.dim_z, 1)
+        y = z - np.dot(self.H, self.x)
+        s = np.dot(self.H, np.dot(self.P, self.H.T)) + self.R
+        k = np.dot(np.dot(self.P, self.H.T), np.linalg.inv(s))
+        self.x = self.x + np.dot(k, y)
+        identity = np.eye(self.dim_x)
+        self.P = np.dot(identity - np.dot(k, self.H), self.P)
 
 np.random.seed(0)
+
+
+def _linear_sum_assignment_numpy(cost_matrix):
+  """匈牙利算法。lap / scipy 缺失时仍能为检测框分配稳定 track_id。"""
+  cost = np.asarray(cost_matrix, dtype=float)
+  n_rows, n_cols = cost.shape
+  n = max(n_rows, n_cols)
+  padded = np.full((n, n), 0.0 if n == 0 else np.max(cost) + 1.0)
+  padded[:n_rows, :n_cols] = cost
+  u = np.zeros(n + 1)
+  v = np.zeros(n + 1)
+  p = np.zeros(n + 1, dtype=int)
+  way = np.zeros(n + 1, dtype=int)
+  for i in range(1, n + 1):
+    p[0] = i
+    j0 = 0
+    minv = np.full(n + 1, np.inf)
+    used = np.zeros(n + 1, dtype=bool)
+    while True:
+      used[j0] = True
+      i0 = p[j0]
+      delta = np.inf
+      j1 = 0
+      for j in range(1, n + 1):
+        if used[j]:
+          continue
+        cur = padded[i0 - 1, j - 1] - u[i0] - v[j]
+        if cur < minv[j]:
+          minv[j] = cur
+          way[j] = j0
+        if minv[j] < delta:
+          delta = minv[j]
+          j1 = j
+      for j in range(n + 1):
+        if used[j]:
+          u[p[j]] += delta
+          v[j] -= delta
+        else:
+          minv[j] -= delta
+      j0 = j1
+      if p[j0] == 0:
+        break
+    while True:
+      j1 = way[j0]
+      p[j0] = p[j1]
+      j0 = j1
+      if j0 == 0:
+        break
+  row_ind = []
+  col_ind = []
+  for j in range(1, n + 1):
+    if p[j] != 0 and p[j] <= n_rows and j <= n_cols:
+      row_ind.append(p[j] - 1)
+      col_ind.append(j - 1)
+  return np.asarray(row_ind, dtype=int), np.asarray(col_ind, dtype=int)
 
 
 def linear_assignment(cost_matrix):
@@ -39,7 +111,11 @@ def linear_assignment(cost_matrix):
     _, x, y = lap.lapjv(cost_matrix, extend_cost=True)
     return np.array([[y[i],i] for i in x if i >= 0]) #
   except ImportError:
-    from scipy.optimize import linear_sum_assignment
+    try:
+      from scipy.optimize import linear_sum_assignment
+    except ImportError:
+      x, y = _linear_sum_assignment_numpy(cost_matrix)
+      return np.array(list(zip(x, y)))
     x, y = linear_sum_assignment(cost_matrix)
     return np.array(list(zip(x, y)))
 
@@ -101,7 +177,7 @@ class KalmanBoxTracker(object):
     Initialises a tracker using initial bounding box.
     """
     #define constant velocity model
-    self.kf = KalmanFilter(dim_x=7, dim_z=4) 
+    self.kf = _KalmanFilter(dim_x=7, dim_z=4) 
     self.kf.F = np.array([[1,0,0,0,1,0,0],[0,1,0,0,0,1,0],[0,0,1,0,0,0,1],[0,0,0,1,0,0,0],  [0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]])
     self.kf.H = np.array([[1,0,0,0,0,0,0],[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]])
 
@@ -269,6 +345,17 @@ def parse_args():
     return args
 
 if __name__ == '__main__':
+  import argparse
+  import glob
+  import os
+  import time
+
+  import matplotlib
+  matplotlib.use('TkAgg')
+  import matplotlib.pyplot as plt
+  import matplotlib.patches as patches
+  from skimage import io
+
   # all train
   args = parse_args()
   display = args.display

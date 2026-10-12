@@ -36,6 +36,8 @@ COCO_PERSON_CLASS_ID = 0
 _LINE_SIDE_EPS = 1e-3
 # 线段相交参数容差
 _SEG_INTERSECT_EPS = 1e-6
+# 线段两端外扩。左闸机道在线的起点外侧，从这里走进来也要计
+_ENDPOINT_EXTEND_PX = 140.0
 
 _LINE_KIND_COUNT = "count"
 _LINE_KIND_BYPASS = "bypass"
@@ -354,6 +356,13 @@ class PersonCountDetector26Skill(BaseSkill):
         self.cross_confirm_miss_tolerance: int = max(
             0, int(params.get("cross_confirm_miss_tolerance", 1) or 0)
         )
+        self._count_frame_index = 0
+        # 还在黄线外侧的人。检测丢帧、跟踪号断开后用来补计
+        self._outside_seen: Dict[Any, Dict[str, Any]] = {}
+        self._counted_ids: Set[Any] = set()
+        self._seen_inside: Set[Any] = set()
+        self._counted_boxes: Dict[Any, Tuple[int, List[Tuple[float, float]]]] = {}
+        self._frame_track_ids: Set[Any] = set()
         # track_id -> 上一帧检测框中心点（用于构造轨迹段求交）
         self._track_prev_center: Dict[Any, Tuple[float, float]] = {}
         # track_id -> 上一帧中心速度（像素/帧），用于短时丢检预测
@@ -787,6 +796,131 @@ class PersonCountDetector26Skill(BaseSkill):
             and -_SEG_INTERSECT_EPS <= u <= 1.0 + _SEG_INTERSECT_EPS
         )
 
+    def _crosses_segment_or_end(
+        self,
+        prev: Tuple[float, float],
+        curr: Tuple[float, float],
+        a: Tuple[float, float],
+        b: Tuple[float, float],
+    ) -> bool:
+        """轨迹穿过计数线段，或穿过两端外扩的那一小段。"""
+        ax, ay = prev
+        bx, by = curr
+        cx, cy = a
+        dx, dy = b
+        den = (ax - bx) * (cy - dy) - (ay - by) * (cx - dx)
+        if abs(den) <= _SEG_INTERSECT_EPS:
+            return False
+        t = ((ax - cx) * (cy - dy) - (ay - cy) * (cx - dx)) / den
+        if not (-_SEG_INTERSECT_EPS <= t <= 1.0 + _SEG_INTERSECT_EPS):
+            return False
+        u = -((ax - bx) * (ay - cy) - (ay - by) * (ax - cx)) / den
+        length = ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
+        if length <= _LINE_SIDE_EPS:
+            return False
+        extra = _ENDPOINT_EXTEND_PX / length
+        return -extra <= u <= 1.0 + extra
+
+    @staticmethod
+    def _box_iou(
+        a: List[Tuple[float, float]],
+        b: List[Tuple[float, float]],
+    ) -> float:
+        ax1, ay1 = min(p[0] for p in a), min(p[1] for p in a)
+        ax2, ay2 = max(p[0] for p in a), max(p[1] for p in a)
+        bx1, by1 = min(p[0] for p in b), min(p[1] for p in b)
+        bx2, by2 = max(p[0] for p in b), max(p[1] for p in b)
+        iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+        return inter / union if union > 0 else 0.0
+
+    def _overlaps_counted(self, corners: List[Tuple[float, float]]) -> bool:
+        hit = False
+        for tid, (frame_index, prev) in list(self._counted_boxes.items()):
+            if self._count_frame_index - frame_index > 45:
+                self._counted_boxes.pop(tid, None)
+                continue
+            if prev and self._box_iou(corners, prev) >= 0.25:
+                hit = True
+        return hit
+
+    def _near_fresh_counted(self, center: Tuple[float, float]) -> bool:
+        """刚计过数的人跟踪号一换，新框还在他附近，不要再计一次。"""
+        for tid, (frame_index, prev) in self._counted_boxes.items():
+            if tid in self._frame_track_ids:
+                continue
+            if not prev:
+                continue
+            age = self._count_frame_index - frame_index
+            if age > 45:
+                continue
+            cx = sum(p[0] for p in prev) / len(prev)
+            cy = sum(p[1] for p in prev) / len(prev)
+            dist2 = (center[0] - cx) ** 2 + (center[1] - cy) ** 2
+            # 刚换号、人还在原地：2 帧内 270 像素，或 45 帧内仍贴着已计数的人
+            if age <= 2 and dist2 < 270.0 ** 2:
+                return True
+            if age <= 45 and dist2 < 120.0 ** 2:
+                return True
+        return False
+
+    def _claim_outside_cross(
+        self,
+        track_id: Any,
+        center: Tuple[float, float],
+        corners: List[Tuple[float, float]],
+        line_a: Tuple[float, float],
+        line_b: Tuple[float, float],
+        reference_side: int,
+        line_index: int,
+    ) -> bool:
+        """新跟踪号一出现就在黄线内侧时，接上刚在线外消失的那个人。"""
+        if self._near_fresh_counted(center):
+            return False
+        best_tid = None
+        best_dist = 1e9
+        for tid, rec in list(self._outside_seen.items()):
+            if tid == track_id or tid in self._frame_track_ids or tid in self._counted_ids:
+                continue
+            age = self._count_frame_index - int(rec.get("frame", 0))
+            if age > 45:
+                self._outside_seen.pop(tid, None)
+                continue
+            if age < 1:
+                continue
+            anchor = rec.get("center")
+            if not isinstance(anchor, tuple):
+                continue
+            if self._side_of_line(anchor, line_a, line_b) != -reference_side:
+                continue
+            if not self._crosses_segment_or_end(anchor, center, line_a, line_b):
+                continue
+            dx = line_b[0] - line_a[0]
+            dy = line_b[1] - line_a[1]
+            length2 = dx * dx + dy * dy
+            if length2 <= _LINE_SIDE_EPS:
+                continue
+            tt = ((anchor[0] - line_a[0]) * dx + (anchor[1] - line_a[1]) * dy) / length2
+            tt = 0.0 if tt < 0.0 else 1.0 if tt > 1.0 else tt
+            px = line_a[0] + tt * dx
+            py = line_a[1] + tt * dy
+            dist = ((anchor[0] - px) ** 2 + (anchor[1] - py) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_tid = tid
+        if best_tid is None:
+            return False
+        self._outside_seen.pop(best_tid, None)
+        self._counted_ids.add(best_tid)
+        self._line_confirmed_side[
+            self._line_state_key(best_tid, _LINE_KIND_COUNT, line_index)
+        ] = reference_side
+        return True
+
     def _crossing_direction(
         self,
         prev_point: Tuple[float, float],
@@ -987,6 +1121,47 @@ class PersonCountDetector26Skill(BaseSkill):
                     pending = -1
                     self._line_pending_direction[state_key] = -1
 
+            center_side = self._side_of_line(center, line_a, line_b)
+            if kind == _LINE_KIND_COUNT and track_id in self._counted_ids:
+                confirmed = reference_side
+                self._line_confirmed_side[state_key] = reference_side
+                if corners:
+                    self._counted_boxes[track_id] = (self._count_frame_index, list(corners))
+            elif (
+                kind == _LINE_KIND_COUNT
+                and center_side == -reference_side
+                and track_id not in self._counted_ids
+            ):
+                self._outside_seen[track_id] = {
+                    "frame": self._count_frame_index,
+                    "center": center,
+                }
+
+            # 实时丢帧时人往往只被看到一次已经在黄线内侧。轨迹确实穿过线段就立刻计
+            jumped = False
+            if (
+                kind == _LINE_KIND_COUNT
+                and prev_center is not None
+                and center_side == reference_side
+                and confirmed != reference_side
+                and track_id not in self._counted_ids
+            ):
+                prev_side = self._side_of_line(prev_center, line_a, line_b)
+                if prev_side == -reference_side and self._crosses_segment_or_end(
+                    prev_center, center, line_a, line_b
+                ):
+                    jumped = True
+            if jumped:
+                events.append((line_index, 1))
+                self._line_confirmed_side[state_key] = reference_side
+                self._line_pending_direction.pop(state_key, None)
+                self._line_side_streak.pop(state_key, None)
+                self._counted_ids.add(track_id)
+                self._outside_seen.pop(track_id, None)
+                if corners:
+                    self._counted_boxes[track_id] = (self._count_frame_index, list(corners))
+                continue
+
             on_enter = self._is_center_and_corners_confirmed(
                 center, corners, line_a, line_b, reference_side
             )
@@ -1008,8 +1183,36 @@ class PersonCountDetector26Skill(BaseSkill):
                         self._line_confirmed_side[state_key] = reference_side
                         self._line_pending_direction.pop(state_key, None)
                         self._line_side_streak.pop(state_key, None)
+                        if kind == _LINE_KIND_COUNT:
+                            self._counted_ids.add(track_id)
+                            self._outside_seen.pop(track_id, None)
+                            if corners:
+                                self._counted_boxes[track_id] = (
+                                    self._count_frame_index,
+                                    list(corners),
+                                )
                 else:
-                    # 无穿越意图出现在 enter 侧：只记侧别，不计数（开场目标）
+                    # 开场已经在内侧的人不计。检测丢帧后新号出现在内侧，则接上刚消失的线外人
+                    claimed = (
+                        kind == _LINE_KIND_COUNT
+                        and self._claim_outside_cross(
+                            track_id,
+                            center,
+                            corners,
+                            line_a,
+                            line_b,
+                            reference_side,
+                            line_index,
+                        )
+                    )
+                    if claimed:
+                        events.append((line_index, 1))
+                        self._counted_ids.add(track_id)
+                        if corners:
+                            self._counted_boxes[track_id] = (
+                                self._count_frame_index,
+                                list(corners),
+                            )
                     self._line_confirmed_side[state_key] = reference_side
                     self._line_side_streak.pop(state_key, None)
             elif on_exit:
@@ -1030,6 +1233,31 @@ class PersonCountDetector26Skill(BaseSkill):
                     self._line_confirmed_side[state_key] = -reference_side
                     self._line_side_streak.pop(state_key, None)
             else:
+                if (
+                    kind == _LINE_KIND_COUNT
+                    and center_side == reference_side
+                    and confirmed is None
+                    and pending is None
+                    and track_id not in self._counted_ids
+                    and self._claim_outside_cross(
+                        track_id,
+                        center,
+                        corners,
+                        line_a,
+                        line_b,
+                        reference_side,
+                        line_index,
+                    )
+                ):
+                    events.append((line_index, 1))
+                    self._counted_ids.add(track_id)
+                    self._line_confirmed_side[state_key] = reference_side
+                    if corners:
+                        self._counted_boxes[track_id] = (
+                            self._count_frame_index,
+                            list(corners),
+                        )
+                    continue
                 # 本帧未满足中心+角点：给少量容错，避免断 1 帧就清零
                 if pending is not None or confirmed in (reference_side, -reference_side):
                     miss = int(self._line_side_miss.get(state_key, 0) or 0) + 1
@@ -1052,7 +1280,9 @@ class PersonCountDetector26Skill(BaseSkill):
         bypass_segments: List[Dict[str, Any]],
         is_predicted: bool = False,
     ) -> None:
-        """处理单个 track 的过线/绕行（真实检测或短时预测均可）。"""
+        """处理单个 track 的过线/绕行。丢检预测不参与计数。"""
+        if is_predicted:
+            return
         prev_point = self._track_prev_center.get(track_id)
         if prev_point is not None and not is_predicted:
             self._track_velocity[track_id] = (
@@ -1204,6 +1434,60 @@ class PersonCountDetector26Skill(BaseSkill):
                     point=point,
                 )
 
+        # 新跟踪号没有上一帧，进不了穿线确认。人已经在黄线内侧时，接上刚消失的线外人
+        if track_id in self._counted_ids:
+            if corners:
+                self._counted_boxes[track_id] = (self._count_frame_index, list(corners))
+            return
+        if not count_segments:
+            return
+        for line_index, segment in enumerate(count_segments):
+            line_a = segment["line_a"]
+            line_b = segment["line_b"]
+            reference_side = segment["enter_side"]
+            side = self._side_of_line(point, line_a, line_b)
+            if side == -reference_side:
+                self._outside_seen[track_id] = {
+                    "frame": self._count_frame_index,
+                    "center": point,
+                }
+                return
+            if side != reference_side:
+                continue
+            # 只在这个跟踪号第一次出现在内侧时补计，避免线内的人每帧都去认线外的人
+            if track_id in self._seen_inside:
+                if track_id in self._counted_ids and corners:
+                    self._counted_boxes[track_id] = (
+                        self._count_frame_index,
+                        list(corners),
+                    )
+                return
+            self._seen_inside.add(track_id)
+            if not self._claim_outside_cross(
+                track_id,
+                point,
+                corners,
+                line_a,
+                line_b,
+                reference_side,
+                line_index,
+            ):
+                continue
+            self.enter_count += 1
+            self._counted_ids.add(track_id)
+            self._line_confirmed_side[
+                self._line_state_key(track_id, _LINE_KIND_COUNT, line_index)
+            ] = reference_side
+            if corners:
+                self._counted_boxes[track_id] = (self._count_frame_index, list(corners))
+            self._record_enter_event(
+                detection,
+                track_id=track_id,
+                line_index=line_index,
+                point=point,
+            )
+            return
+
     def _clear_track_state(self, track_id: Any) -> None:
         """清除单个 track 的过线相关状态。"""
         self._track_prev_center.pop(track_id, None)
@@ -1255,6 +1539,7 @@ class PersonCountDetector26Skill(BaseSkill):
         self._latest_bypass_events = []
         self._latest_count_exit_events = []
         self._latest_enter_events = []
+        self._count_frame_index += 1
         if count_line is None and bypass_line is None:
             return
 
@@ -1268,6 +1553,11 @@ class PersonCountDetector26Skill(BaseSkill):
         active_ids: Set[Any] = set()
         count_segments = count_line.get("segments", []) if count_line else []
         bypass_segments = bypass_line.get("segments", []) if bypass_line else []
+        self._frame_track_ids = {
+            detection.get("track_id")
+            for detection in detections
+            if detection.get("track_id") is not None
+        }
 
         for detection in detections:
             track_id = detection.get("track_id")
@@ -1443,6 +1733,10 @@ class PersonCountDetector26Skill(BaseSkill):
         self._line_pending_direction.clear()
         self._line_side_streak.clear()
         self._line_side_miss.clear()
+        self._outside_seen.clear()
+        self._counted_ids.clear()
+        self._seen_inside.clear()
+        self._counted_boxes.clear()
         self._latest_bypass_events = []
         self._latest_count_exit_events = []
         self._latest_enter_events = []
@@ -1461,6 +1755,10 @@ class PersonCountDetector26Skill(BaseSkill):
         self._line_pending_direction.clear()
         self._line_side_streak.clear()
         self._line_side_miss.clear()
+        self._outside_seen.clear()
+        self._counted_ids.clear()
+        self._seen_inside.clear()
+        self._counted_boxes.clear()
 
     def _load_image(
         self,

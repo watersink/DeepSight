@@ -127,8 +127,8 @@ class BaseSkill(ABC):
             try:
                 from app.services.tracker_service import TrackerService
                 self.tracker = TrackerService.from_params(params)
-            except ImportError:
-                self.log("warning", "无法导入跟踪器服务，将跳过目标跟踪")
+            except ImportError as exc:
+                self.log("warning", f"无法导入跟踪器服务，将跳过目标跟踪: {exc}")
         
         # 初始化技能
         self._initialize()

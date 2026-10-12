@@ -1,4 +1,5 @@
 """ZLMediaKit HTTP API 客户端"""
+import http.client
 import json
 import logging
 import urllib.error
@@ -281,6 +282,38 @@ class ZLMClient:
         )
         return key
 
+    def close_streams(
+        self,
+        app: str,
+        stream: str,
+        *,
+        vhost: Optional[str] = None,
+        force: int = 1,
+    ) -> int:
+        """关闭指定 app/stream 上已有的推流，避免再次推流时 Already publishing。"""
+        vhost = vhost or settings.ZLM_DEFAULT_VHOST
+        payload = self._request(
+            "close_streams",
+            {
+                "vhost": vhost,
+                "app": app,
+                "stream": stream,
+                "force": int(force),
+            },
+        )
+        closed = payload.get("count_closed", payload.get("count", 0))
+        try:
+            closed_n = int(closed or 0)
+        except (TypeError, ValueError):
+            closed_n = 0
+        logger.info(
+            "close_streams app=%s stream=%s closed=%s",
+            app,
+            stream,
+            closed_n,
+        )
+        return closed_n
+
     def del_stream_proxy(self, key: str) -> None:
         """删除拉流代理（/index/api/delStreamProxy）。"""
         k = (key or "").strip()
@@ -379,6 +412,14 @@ class ZLMClient:
             raise ZLMClientError(f"getSnap HTTP {e.code}: {detail}") from e
         except urllib.error.URLError as e:
             raise ZLMClientError(f"无法连接 ZLMediaKit ({self.base_url}): {e.reason}") from e
+        except (
+            http.client.RemoteDisconnected,
+            http.client.IncompleteRead,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as e:
+            raise ZLMClientError(f"getSnap 连接中断: {e}") from e
 
         if not data:
             raise ZLMClientError("getSnap 返回空内容")
