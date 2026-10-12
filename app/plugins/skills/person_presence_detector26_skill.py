@@ -549,7 +549,7 @@ class PersonPresenceDetector26Skill(BaseSkill):
             frame = _put_chinese_text(
                 frame,
                 f"当前画面人数: {count}",
-                (40, 50),
+                (40, 120),
                 (255, 255, 255),
                 size=32,
                 bg_bgr=(0, 0, 0),

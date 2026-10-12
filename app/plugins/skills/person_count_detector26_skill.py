@@ -44,6 +44,83 @@ _LINE_KIND_BYPASS = "bypass"
 _ALERT_BOX_COLOR_COUNT = (0, 255, 255)
 _ALERT_BOX_COLOR_VIOLATION = (0, 0, 255)
 
+_FONT_CANDIDATES = [
+    Path(r"C:\Windows\Fonts\msyh.ttc"),
+    Path(r"C:\Windows\Fonts\simhei.ttf"),
+    Path(r"C:\Windows\Fonts\simsun.ttc"),
+]
+
+
+def _put_chinese_text(
+    frame_bgr: np.ndarray,
+    text: str,
+    xy: Tuple[int, int],
+    color_bgr: Tuple[int, int, int] = (255, 255, 255),
+    size: int = 32,
+    *,
+    bg_bgr: Optional[Tuple[int, int, int]] = (0, 0, 0),
+    padding: int = 8,
+) -> np.ndarray:
+    """绘制中文（OpenCV putText 无法可靠显示中文）；默认黑底白字。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        (tw, th), baseline = cv2.getTextSize(
+            text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2
+        )
+        x, y = xy
+        if bg_bgr is not None:
+            cv2.rectangle(
+                frame_bgr,
+                (x - padding, y - th - padding),
+                (x + tw + padding, y + baseline + padding),
+                bg_bgr,
+                -1,
+            )
+        cv2.putText(
+            frame_bgr,
+            text,
+            (x, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            color_bgr,
+            2,
+        )
+        return frame_bgr
+
+    font = None
+    for path in _FONT_CANDIDATES:
+        if not path.is_file():
+            continue
+        for index in range(4):
+            try:
+                font = ImageFont.truetype(str(path), size=size, index=index)
+                break
+            except OSError:
+                continue
+        if font is not None:
+            break
+    if font is None:
+        font = ImageFont.load_default()
+
+    rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(rgb)
+    draw = ImageDraw.Draw(image)
+    x, y = xy
+    bbox = draw.textbbox((x, y), text, font=font)
+    if bg_bgr is not None:
+        draw.rectangle(
+            [
+                bbox[0] - padding,
+                bbox[1] - padding,
+                bbox[2] + padding,
+                bbox[3] + padding,
+            ],
+            fill=(bg_bgr[2], bg_bgr[1], bg_bgr[0]),
+        )
+    draw.text((x, y), text, font=font, fill=(color_bgr[2], color_bgr[1], color_bgr[0]))
+    return cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+
 
 class PersonCountDetector26Skill(BaseSkill):
     """
@@ -1777,11 +1854,11 @@ class PersonCountDetector26Skill(BaseSkill):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2
             )
 
-    def _draw_count_line(self, frame: np.ndarray, enter_count: Optional[int] = None) -> None:
+    def _draw_count_line(self, frame: np.ndarray, enter_count: Optional[int] = None) -> np.ndarray:
         """绘制计数线段、各段对应进入侧参考点与 enter_count。"""
         count_line = self._active_count_line
         if not count_line:
-            return
+            return frame
 
         label = self.gate_direction  # IN / OUT
         for segment in count_line.get("segments", []):
@@ -1802,9 +1879,15 @@ class PersonCountDetector26Skill(BaseSkill):
             )
 
         value = self.enter_count if enter_count is None else int(enter_count)
-        cv2.putText(
-            frame, f"{label}_count: {value}", (40, 80),
-            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2
+        count_label = "入井人数" if str(label).upper() == "IN" else "出井人数"
+        return _put_chinese_text(
+            frame,
+            f"{count_label}: {value}",
+            (40, 120),
+            (255, 255, 255),
+            size=32,
+            bg_bgr=(0, 0, 0),
+            padding=8,
         )
 
     def _draw_detections_on_frame(self, frame: np.ndarray, alert_data: Dict) -> np.ndarray:
@@ -1834,7 +1917,7 @@ class PersonCountDetector26Skill(BaseSkill):
             self.draw_track_trajectories(frame, detections, track_color_map=track_color_map)
 
             enter_count = alert_data.get("enter_count", self.enter_count)
-            self._draw_count_line(frame, enter_count=enter_count)
+            frame = self._draw_count_line(frame, enter_count=enter_count)
             self._draw_bypass_line(frame)
 
             for detection in detections:
