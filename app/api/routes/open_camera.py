@@ -90,6 +90,50 @@ def _person_count_camera_ids(db: Session) -> set:
     return ids
 
 
+def _person_count_task_streams(
+    db: Session, camera_ids: set
+) -> Dict[int, List[Dict[str, Any]]]:
+    """反查这些摄像仪上「人员计数任务」的 **AI 画框流**坐标，按摄像仪 id 归组。
+
+    AI 画框流 = ``{task.scene_id}/{algo.skill_name}``：任务把带检测框的画面推到
+    这个 app/stream（见 ``settings.build_push_url``），与前端任务面板的
+    ``flv_url`` 完全同源。**这才是平台要看的"有框"视频**；
+    摄像仪自身的 ``in_url``（如 ``live/guanlong``）只是原始源流，没有框。
+    """
+    skills = _person_count_skills()
+    grouped: Dict[int, List[Dict[str, Any]]] = {}
+    for task in db.scalars(
+        select(TaskConfig)
+        .options(joinedload(TaskConfig.algorithm_config))
+        .order_by(TaskConfig.id)
+    ).all():
+        algo = getattr(task, "algorithm_config", None)
+        skill = str(getattr(algo, "skill_name", None) or "").strip()
+        if skill not in skills:
+            continue
+        camera_id = int(getattr(task, "camera_id", 0) or 0)
+        if not camera_id or camera_id not in camera_ids:
+            continue
+        scene_id = str(getattr(task, "scene_id", None) or "").strip()
+        if not scene_id:
+            continue
+        grouped.setdefault(camera_id, []).append(
+            {
+                "app": scene_id,
+                "stream": skill,
+                "sceneId": scene_id,
+                "skillName": skill,
+                "taskId": getattr(task, "id", None),
+                "taskName": str(getattr(task, "name", None) or ""),
+                # 没开「AI 识别结果推流」的任务不会产出画框流
+                "pushAnnotatedStream": bool(
+                    getattr(task, "push_annotated_stream", False)
+                ),
+            }
+        )
+    return grouped
+
+
 def _build_urls(app: str, stream: str) -> Dict[str, str]:
     """拼装播放地址：FLV / HLS / RTSP。"""
     app_s = str(app or "").strip().strip("/")
@@ -142,9 +186,13 @@ def get_camera_play_url(
     - ``flvUrl``：HTTP-FLV，前端用 flv.js 播放（推荐）
     - ``hlsUrl``：HLS（m3u8），前端用 hls.js / 原生播放
     - ``rtspUrl``：RTSP 拉流地址（浏览器不支持，备用）
-    - ``streams``：该摄像仪全部人员计数流（入井/出井等多条时按数组返回）
+    - ``streams``：该摄像仪全部人员计数流；每项含 ``source``
+      （``ai``=任务画框流，带检测框 / ``source``=摄像仪原始源流，无框）与 ``online``
 
-    只返回**人员计数**用途的流；过暗/过曝/模糊/挪移/遮挡等用途不返回。
+    优先返回**任务的 AI 画框流** ``{scene_id}/{skill_name}``（与前端任务面板
+    ``flv_url`` 同源，**带检测框**）；任务没跑或没开「AI 识别结果推流」时，
+    回落到摄像仪原始源流兜底。只返回**人员计数**用途的流，过暗/过曝/模糊/
+    挪移/遮挡等用途不返回。
     """
     code = str(camera_code or "").strip()
     if not code:
@@ -157,43 +205,82 @@ def get_camera_play_url(
     )
     if not cameras:
         logger.info("取流接口：cameraCode=%s 未找到摄像仪", code)
-        return {"cameraCode": code, "flvUrl": None, "hlsUrl": None, "streams": []}
+        return {
+            "cameraCode": code,
+            "flvUrl": None,
+            "hlsUrl": None,
+            "rtspUrl": None,
+            "online": None,
+            "hint": f"未找到摄像仪编码 {code}：平台侧编码与本系统摄像仪不一致",
+            "streams": [],
+        }
 
     person_count_ids = _person_count_camera_ids(db)
     require_task = bool(getattr(settings, "PERSON_COUNT_STREAM_REQUIRE_TASK", True))
     online_keys = _zlm_online_streams()
+    task_streams = _person_count_task_streams(db, {int(c.id) for c in cameras})
 
     streams: List[Dict[str, Any]] = []
     seen: set = set()
+
+    def _append(
+        cam: Camera, app: str, stream: str, source: str, extra: Dict[str, Any]
+    ) -> None:
+        key = (app, stream)
+        if key in seen or not app or not stream:
+            return
+        seen.add(key)
+        urls = _build_urls(app, stream)
+        item: Dict[str, Any] = {
+            "app": app,
+            "stream": stream,
+            "streamName": f"{app}/{stream}",
+            "flvUrl": urls["flvUrl"],
+            "hlsUrl": urls["hlsUrl"],
+            "rtspUrl": urls["rtspUrl"],
+            # ai = 任务画框流（有检测框）；source = 摄像仪原始源流（无框）
+            "source": source,
+            # 流当前是否在 ZLM 在线（None=查询失败，无法判断）
+            "online": (None if online_keys is None else (key in online_keys)),
+            "positionDesc": str(getattr(cam, "position_desc", None) or "").strip(),
+            "cameraId": getattr(cam, "id", None),
+        }
+        item.update(extra)
+        streams.append(item)
+
     for cam in cameras:
+        # ① 优先：任务的 AI 画框流 {scene_id}/{skill_name}（有检测框，平台要的就是它）
+        for ts in task_streams.get(int(cam.id), []):
+            if not ts.get("pushAnnotatedStream"):
+                continue
+            _append(
+                cam,
+                str(ts["app"]),
+                str(ts["stream"]),
+                "ai",
+                {
+                    "sceneId": ts.get("sceneId"),
+                    "skillName": ts.get("skillName"),
+                    "taskId": ts.get("taskId"),
+                    "taskName": ts.get("taskName"),
+                },
+            )
+
+        # ② 兜底：摄像仪原始源流（任务没跑 / 没开画框推流时至少还能看到画面）
         resolved = _resolve_app_stream(cam)
         if not resolved or not resolved.get("app") or not resolved.get("stream"):
             continue
-        key = (resolved["app"], resolved["stream"])
-        if key in seen:
-            continue
-
         by_task = int(getattr(cam, "id", 0) or 0) in person_count_ids
         by_extra = _matches_extra_prefix(resolved["stream"])
         matched = by_task if require_task else (by_task or by_extra)
         if not matched:
             continue
-
-        seen.add(key)
-        urls = _build_urls(resolved["app"], resolved["stream"])
-        streams.append(
-            {
-                "app": resolved["app"],
-                "stream": resolved["stream"],
-                "streamName": f"{resolved['app']}/{resolved['stream']}",
-                "flvUrl": urls["flvUrl"],
-                "hlsUrl": urls["hlsUrl"],
-                "rtspUrl": urls["rtspUrl"],
-                # 流当前是否在 ZLM 在线（None=查询失败，无法判断）
-                "online": (None if online_keys is None else (key in online_keys)),
-                "positionDesc": str(getattr(cam, "position_desc", None) or "").strip(),
-                "cameraId": getattr(cam, "id", None),
-            }
+        _append(
+            cam,
+            resolved["app"],
+            resolved["stream"],
+            "source",
+            {"sceneId": None, "skillName": None},
         )
 
     if not streams:
@@ -203,14 +290,33 @@ def get_camera_play_url(
             len(cameras),
         )
 
+    # 平台播放器取用的是顶层 rtspUrl / flvUrl / hlsUrl，排序规则（越靠前越优先）：
+    #   1) 在线 > 离线（给离线流平台会报「视频流连接超时」）
+    #   2) 同为在线/离线时，AI 画框流 > 摄像仪原始源流（平台要的是有检测框的视频）
+    streams.sort(
+        key=lambda s: (
+            0 if s.get("online") else 1,
+            0 if s.get("source") == "ai" else 1,
+        )
+    )
     first = streams[0] if streams else {}
     online = first.get("online")
     hint = None
     if streams and online is False:
-        hint = (
-            "人员计数流已配置但当前未推流（ZLM 上不存在该流），"
-            "播放地址暂时不可用；请确认对应检测任务已在运行"
-        )
+        if first.get("source") == "ai":
+            hint = (
+                "AI 画框流已配置但当前未推流（对应检测任务未在运行），"
+                "播放地址暂时不可用"
+            )
+        else:
+            hint = (
+                "人员计数流已配置但当前未推流（ZLM 上不存在该流），"
+                "播放地址暂时不可用；请确认对应检测任务已在运行"
+            )
+    elif streams and first.get("source") == "source" and any(
+        s.get("source") == "ai" for s in streams
+    ):
+        hint = "AI 画框流当前不在线，暂用摄像仪原始源流（无检测框）"
     return {
         "cameraCode": code,
         "flvUrl": first.get("flvUrl"),
