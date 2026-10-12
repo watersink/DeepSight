@@ -89,7 +89,7 @@ class BoardingDetectorSkill(BaseSkill):
             "new_track_thresh": 0.6,
             "tracking_history_frames": 10,
             "enable_track_history": True,
-            "model_version": "1",
+            "model_version": "2",
             "enable_timing_log": False,
             "enable_helmet_filter": True,
             "helmet_min_ratio": 0.04,

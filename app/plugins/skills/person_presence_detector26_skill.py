@@ -70,7 +70,7 @@ class PersonPresenceDetector26Skill(BaseSkill):
             "new_track_thresh": 0.6,
             "tracking_history_frames": 10,
             "enable_track_history": True,
-            "model_version": "1",
+            "model_version": "2",
             "enable_timing_log": False,
         },
         "alert_definitions": [

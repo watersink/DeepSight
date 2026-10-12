@@ -66,7 +66,7 @@ class PersonCountDetector26Skill(BaseSkill):
         "type": "detection",
         "name": "person_count_detector26",
         "name_zh": "人流量检测(YOLO26)",
-        "version": "1.0",
+        "version": "2.0",
         "cover_image": "/skills/person_count_detector26.png",
         "description": (
             "基于 yolo26_person 原始 COCO 模型的人数检测技能，后处理仅保留 person 类；"
@@ -131,7 +131,7 @@ class PersonCountDetector26Skill(BaseSkill):
             "new_track_thresh": 0.6,
             "tracking_history_frames": 10,
             "enable_track_history": True,
-            "model_version": "1",
+            "model_version": "2",
             "enable_timing_log": False,
             # 过线进入人数初始值（仅统计进入 enter_point 一侧）
             "enter_count": 0,
